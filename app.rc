@@ -1,0 +1,37 @@
+// 版本信息：未签名 exe 带上"有身份"的版本资源，信誉系统/杀软启发式的观感会好一些。
+// 【必须】#include <winver.h> —— 它把 VS_VERSION_INFO 定义为数字 1；
+// 不包含的话 windres 会把资源登记成**名字** "VS_VERSION_INFO"，
+// 而 Windows 只认 ID=1 的版本资源（GetFileVersionInfoSize 返回 0、属性页空白）。
+// 值刻意只用 ASCII，避免 windres 代码页问题。
+#include <winver.h>
+
+101 ICON "diskmate_tree.ico"
+1 RT_MANIFEST "app.manifest"
+
+LANGUAGE 0x9, 0x1
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,0,0,0
+ PRODUCTVERSION 1,0,0,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "DiskMate"
+            VALUE "FileDescription", "DiskMate Disk Space Analyzer"
+            VALUE "FileVersion", "1.0.0.0"
+            VALUE "ProductName", "DiskMate"
+            VALUE "ProductVersion", "1.0.0.0"
+            VALUE "LegalCopyright", "Copyright (C) 2026"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

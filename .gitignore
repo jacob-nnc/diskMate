@@ -1,0 +1,48 @@
+# 构建产物
+build/
+build_*/
+out/
+dist/
+
+# 运行时/诊断产物
+*.log
+*.bmp
+*.obj
+*.o
+*.res
+bin_dump.bin
+full_mft.json
+full_walk.json
+fulldump_meta.txt
+diskmate.lib
+webview_data/
+*.tmp
+
+# 用户配置（每个人机器上都不一样，不要提交）
+config.json
+ui-prefs.json
+diskmate.ini
+
+# 发布包
+release/
+*.zip
+*.7z
+DiskMate_Setup.exe
+
+# 测试数据（很大，用 tools/ 里的脚本现场生成）
+dmtest/
+icon/*.json
+icon/*.js
+icon/*.b64
+
+# 编辑器/系统
+.vs/
+.vscode/
+*.user
+Thumbs.db
+desktop.ini
+
+# 证书私钥绝对不能提交
+*.pfx
+*.p12
+*.snk

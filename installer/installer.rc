@@ -1,0 +1,11 @@
+﻿#include <windows.h>
+
+IDI_APP ICON "..\\release\\DiskMate_v1.0\\web\\diskmate_tree.ico"
+
+IDR_PAYLOAD_1 RCDATA "..\\release\\DiskMate_v1.0\\diskmate_web.exe"
+IDR_PAYLOAD_2 RCDATA "..\\release\\DiskMate_v1.0\\WebView2Loader.dll"
+IDR_PAYLOAD_3 RCDATA "..\\release\\DiskMate_v1.0\\web\\index.html"
+IDR_PAYLOAD_4 RCDATA "..\\release\\DiskMate_v1.0\\web\\diskmate_tree.ico"
+IDR_PAYLOAD_5 RCDATA "..\\release\\DiskMate_v1.0\\diskmate.ini"
+IDR_PAYLOAD_6 RCDATA "readme_payload.txt"
+IDR_PAYLOAD_7 RCDATA "..\\release\\DiskMate_v1.0\\config.json"

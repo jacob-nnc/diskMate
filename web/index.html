@@ -1,0 +1,3537 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<link rel="icon" href="diskmate_tree.ico">
+<title>DiskMate</title>
+<style>
+  /* 主题用 CSS 变量：切深浅色只改 :root 上的一组值 */
+  :root {
+    --dpr:1;                      /* 由 JS 写成 devicePixelRatio，用于把 1px 换算成物理 1px */
+    --hair:calc(1px / var(--dpr)); /* 物理 1px */
+    --tree-line:#4a525e;          /* 层级线：比 --line 更亮，浅背景主题下才看得清 */
+    --bg:#1e2228; --panel:#262b33; --line:#14171c;
+    --text:#e2e8f0; --dim:#96a2b2;
+    --accent:#2d69ff; --sel:#265294; --btn:#3a4048; --btn-hover:#474e57;
+    --row-h:30px; --indent:16px; --arrow:22px; --pad:8px;
+    --split:55%;
+  }
+  :root[data-theme="light"] {
+    --dpr:1;
+    --hair:calc(1px / var(--dpr));
+    --tree-line:#b3bcc8;
+    --bg:#f8fafc; --panel:#eef1f5; --line:#d6dce4;
+    --text:#181e26; --dim:#646e7c;
+    --accent:#2563eb; --sel:#cee2ff; --btn:#e3e8ef; --btn-hover:#d3dae4;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; }
+  body {
+    background:var(--bg); color:var(--text);
+    font:13px/1.5 "Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;
+    display:flex; flex-direction:column; height:100vh; overflow:hidden;
+  }
+
+  /* ---- 工具栏 ---- */
+  .toolbar {
+    display:flex; align-items:center; gap:8px;
+    padding:10px 12px; background:var(--panel);
+    border-bottom:1px solid var(--line); flex:none;
+  }
+  .toolbar .caption { color:var(--dim); }
+  select {
+    height:30px; padding:0 8px; border:1px solid var(--line); border-radius:6px;
+    background:var(--btn); color:var(--text); font:inherit; font-size:12px;
+    cursor:pointer; outline:none;
+  }
+  select:hover { background:var(--btn-hover); }
+  input[type=range] { accent-color:var(--accent); vertical-align:middle; }
+  /* 扫描进度：放在【底部状态栏】，条 + 实时文字（项数/字节/速度/耗时） */
+  .prog-wrap {
+    display:none; align-items:center; gap:8px; margin-left:auto; flex:0 0 auto;
+  }
+  .prog-bar {
+    width:110px; height:5px; border-radius:3px; overflow:hidden; flex:0 0 auto;
+    background:color-mix(in srgb, var(--text) 16%, transparent);
+    position:relative;
+  }
+  .prog-bar::after {
+    content:""; position:absolute; top:0; bottom:0; width:40%;
+    border-radius:3px; background:var(--accent);
+    animation:prog-slide 1.1s ease-in-out infinite;
+  }
+  @keyframes prog-slide {
+    0%   { left:-40%; }
+    100% { left:100%; }
+  }
+  .prog-txt { font-size:11px; color:var(--dim); white-space:nowrap; }
+  input[type=text] {
+    flex:1 1 auto; min-width:0; height:30px; padding:0 10px;
+    background:var(--bg); color:var(--text);
+    border:1px solid var(--line); border-radius:6px; outline:none;
+    font:inherit;
+  }
+  input[type=text]:focus { border-color:var(--accent); }
+  button {
+    height:30px; padding:0 14px; border:0; border-radius:6px;
+    background:var(--btn); color:var(--text); font:inherit; cursor:pointer;
+  }
+  button:hover { filter:brightness(1.18); background:var(--btn-hover); }
+  button.primary { background:var(--accent); color:#fff; }
+  button.danger { background:#c0392b; color:#fff; }
+  button:disabled { opacity:.45; cursor:default; }
+
+  /* ---- 主体：左列表 / 右树图 ---- */
+  .main { flex:1 1 auto; display:flex; min-height:0; }
+  /* flex:0 0 55% —— 绝对不能写 flex:0 1 auto/width:55%：
+     那样宽度由内容参与计算，展开目录后行变宽会把左栏撑开 → 列坐标累积漂移 */
+  /* 左栏宽度由 --split 控制（JS 拖动分栏条时改这个变量） */
+  .left { flex:0 0 var(--split); width:var(--split); display:flex;
+          flex-direction:column; min-width:0; max-width:var(--split);
+          overflow:hidden; }
+  .right { flex:1 1 auto; min-width:0; position:relative; overflow:hidden; }
+  /* 自定义悬浮提示：原生 title 有 ~0.5-1s 延迟，这里即时显示 */
+  .tm-tip {
+    position: fixed; z-index: 9999; pointer-events: none;
+    max-width: 560px; padding: 6px 10px;
+    background: rgba(20,23,28,.94); color: #fff;
+    border: 1px solid rgba(255,255,255,.22); border-radius: 6px;
+    font: 12px/1.5 'Microsoft YaHei', 'Microsoft YaHei UI', sans-serif;
+    white-space: pre-wrap; word-break: break-all;
+    box-shadow: 0 4px 14px rgba(0,0,0,.35);
+    display: none;
+  }
+
+  /* 面包屑 */
+  .crumbs {
+    flex:none; padding:0 12px; line-height:24px; font-size:12px;
+    background:var(--bg); border-bottom:1px solid var(--line);
+    color:var(--dim); white-space:nowrap; overflow:hidden;
+    text-overflow:ellipsis; user-select:none;
+    height:24px; box-sizing:border-box;
+  }
+  .crumbs b { color:var(--text); font-weight:500; cursor:pointer; }
+  .crumbs b:hover { text-decoration:underline; }
+  .crumbs span { margin:0 4px; opacity:.6; }
+
+  /* ---- 树图块 ---- */
+
+  /* ---- 表头 ---- */
+  .head { user-select:none; -webkit-user-select:none;
+    position:relative; flex:none; height:26px;
+    background:var(--panel); border-bottom:1px solid var(--line);
+    font-size:12px; color:var(--dim); user-select:none;
+    overflow:hidden;              /* 列宽超出时裁掉，别溢到右边树图上 */
+    min-width:0;
+  }
+  /* 表头与行用同一套坐标（JS 算的 left/width），所以必然对齐 */
+  .head .hcell {
+    position:absolute; top:0; height:26px; line-height:26px;
+    padding-left:6px; cursor:pointer; overflow:hidden;
+    white-space:nowrap; text-overflow:ellipsis;
+  }
+  .head .hcell:hover { color:var(--text); }
+  /* 列宽拖拽手柄：贴在列右边界，宽 5px 命中区（视觉上 1px 细线） */
+  .head .grip {
+    position:absolute; right:-3px; top:0; width:7px; height:100%;
+    cursor:col-resize; z-index:3;
+  }
+  .head .grip::after {
+    content:""; position:absolute; left:3px; top:3px; bottom:3px;
+    width:1px; background:var(--line);
+  }
+  .head .grip:hover::after { background:var(--accent); width:2px; left:2.5px; }
+
+  /* 左右分栏拖拽条 */
+  .splitter {
+    flex:0 0 5px; cursor:col-resize; position:relative;
+    background:var(--bg);
+  }
+  .splitter::after {
+    content:""; position:absolute; left:2px; top:0; bottom:0;
+    width:1px; background:var(--line);
+  }
+  .splitter:hover::after, .splitter.dragging::after {
+    background:var(--accent); width:2px; left:1.5px;
+  }
+  /* 拖拽时禁止选中文本、给个全局光标 */
+  body.dragging { cursor:col-resize !important; user-select:none !important; }
+
+  /* ---- 行列表（虚拟滚动）---- */
+  /* scrollbar-gutter 常驻槽位：展开/收起时 clientWidth 不变 → 列宽不会漂移 */
+  .list { user-select:none; -webkit-user-select:none;
+    flex:1 1 auto;
+    overflow-y:scroll; overflow-x:hidden;
+    scrollbar-gutter:stable;
+    position:relative; min-width:0;
+  }
+  /* 行内所有列都绝对定位，右侧列可能超出容器 → 由 .list 的 overflow-x:hidden 裁掉 */
+  /* 内层容器必须宽度确定（不能被行的绝对定位内容撑开），否则 clientWidth 会漂移，
+     导致每次重算列宽都往右移一点 */
+  /* 内层用绝对定位铺满滚动容器的可视区，宽度不参与内容计算，永不漂移 */
+  .list-inner { position:absolute; left:0; top:0; right:0; }
+  /* 说明：.list-inner 是 absolute（不占流），所以 .list-pin 这个 sticky 元素
+     始终贴在滚动容器顶部、永远可见 —— 用 display 控制何时显示即可。 */
+  /* 悬浮固定行：展开的父目录滚出上方时，固定钉在列表首行 */
+  /* 吸顶行：因为 .list-inner 是 position:absolute（不占正常流高度），
+     sticky 在那种容器里不会钉住 —— 只能用 fixed，坐标由 JS 按 .list 的位置算。 */
+  .list-pin {
+    position:fixed; z-index:6; display:none;
+    height:var(--row-h); background:var(--panel);
+    box-shadow:0 1px 0 var(--line), 0 4px 10px rgba(0,0,0,.25);
+    overflow:hidden;
+  }
+  .list-pin .row { position:absolute; top:0 !important; }
+  /* ---- 列表行 ----
+     每一列用绝对定位 + 手算 left，不依赖 flex/grid 的行为。
+     这样「文件/目录左边缘对齐」是算术保证的，不可能被内容影响。 */
+  .row {
+    position:absolute; left:0; right:0; height:var(--row-h);
+    cursor:default; white-space:nowrap;
+    /* 禁止文本选择：Shift 多选 / 拖拽时鼠标经过文字会把文字选中（蓝色高亮） */
+    user-select:none; -webkit-user-select:none;
+  }
+  /* 行内所有列都绝对定位，垂直居中用 line-height 撑满行高 */
+  .row > * {
+    position:absolute; top:0; height:var(--row-h);
+    line-height:var(--row-h);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .row:hover { background:color-mix(in srgb, var(--text) 6%, transparent); }
+  /* 选中：不用蓝色填充，改白色描边（与树图一致） */
+  .row.selected { background:transparent; box-shadow:inset 0 0 0 1px rgba(255,255,255,.95); }
+
+  /* 换目录/进子目录：从略小放大到 1.0 —— easeOutExpo（≈1-e^(-x)，先快后慢） */
+  @keyframes dm-zoom {
+    from { opacity:0; transform:scale(.965); }
+    to   { opacity:1; transform:scale(1); }
+  }
+  .list-inner.anim, .right.anim, .right canvas.anim {
+    animation:dm-zoom .22s cubic-bezier(0.16, 1, 0.3, 1);
+    transform-origin:50% 40%;
+  }
+
+  /* 箭头列：固定宽 22px，居中 */
+  .twist {
+    width:var(--arrow);
+    text-align:center;
+    color:var(--dim); font-size:15px;
+    user-select:none; cursor:pointer;
+  }
+  .twist:hover { color:var(--text); }
+  /* 文件行：同样的占位，隐藏可见但保留宽度 */
+  .twist.empty { visibility:hidden; cursor:default; }
+
+  /* 名称列：left 由 JS 算（arrow + depth*indent） */
+  .nm { }
+
+  /* ---- 树形连接线（像资源管理器）----
+     每个 .nm 里按 depth 放若干竖线段；最后一段是「├」拐角。 */
+  /* 层级连接线（像资源管理器）。
+     两个坑：
+     1) 宽度 1px 在高DPI下会被抗锯齿摊成虚带 → 用 --hair（物理 1px）。
+     2) .row > * 给 .nm 设了 overflow:hidden，会把竖线裁掉 → .nm 改成 overflow:visible，
+        文字截断交给内层 .nmtxt。
+     3) 竖线上下各溢出 1px，接住邻行的线段，避免行间出现缝（看着「不连续」）。 */
+  .nm { overflow:visible; }
+  .nm .nmtxt { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .nm .tl {
+    position:absolute; top:-1px; height:calc(100% + 2px); width:var(--hair);
+    background:var(--tree-line, var(--line)); pointer-events:none;
+    opacity:.9;
+  }
+  /* ├ / └ 的拐角。
+     ├（还有兄弟）：竖线【贯穿整行】并上下各溢出 1px，直接和邻行的线段接上 —— 不需要
+       再单独画"下半截"，那样反而会在行中/行界处错位（踩过：`100%` 相对 elbow 自身高度，
+       不是行高，导致 T 的下端悬空）。
+     └（最后一个兄弟）：竖线只画到行中，下半截不画。
+     横线（└/├ 的"胳膊"）统一画在行中位置。 */
+  .nm .tl.elbow { top:-1px; height:calc(100% + 2px); }
+  .nm .tl.elbow.end { top:-1px; height:calc(50% + 1px); }
+  .nm .tl.elbow::after {
+    content:""; position:absolute; left:0; top:calc(50% - 0.5px);
+    width:9px; height:var(--hair); background:var(--tree-line, var(--line));
+  }
+
+  /* 数据列：left/width 由 JS 算 */
+  .cd { color:var(--dim); }
+
+
+  /* ---- 设置面板（分组卡片布局）---- */
+  .modal-mask { position:fixed; inset:0; background:rgba(0,0,0,.5);
+    display:none; align-items:center; justify-content:center; z-index:100; }
+  .modal-mask.show { display:flex; }
+  /* 适当加宽：三组并排不挤 */
+  .modal { width:clamp(560px, 78vw, 1000px); max-height:86vh;
+    display:flex; flex-direction:column;
+    background:var(--panel); color:var(--text); border:1px solid var(--line);
+    border-radius:10px; box-shadow:0 16px 48px rgba(0,0,0,.55); }
+  .modal-head { display:flex; align-items:center; justify-content:space-between;
+    padding:11px 16px; border-bottom:1px solid var(--line);
+    font-weight:600; font-size:14px; }
+  .modal-head .x { background:transparent; border:none; color:var(--dim);
+    font-size:15px; cursor:pointer; padding:2px 8px; border-radius:4px; }
+  .modal-head .x:hover { background:var(--btn-hover); color:var(--text); }
+  .modal-body { padding:14px 16px; overflow:auto; }
+
+  /* 分组卡片容器：扫描/树图/界面 三组并排 */
+  .cfg-cards { display:flex; gap:14px; align-items:stretch; flex-wrap:wrap; }
+  .card { flex:1 1 0; min-width:230px; overflow:hidden;
+    border:1px solid var(--line); border-radius:8px; padding:10px 12px 12px;
+    background:color-mix(in srgb, var(--text) 3%, transparent); }
+  .card > h4 { margin:0 0 8px; font-size:12px; color:var(--accent);
+    font-weight:700; letter-spacing:.5px; }
+  .card.wide { flex:1 1 100%; }
+
+  .frow { display:flex; align-items:center; padding:3px 0; gap:8px; min-width:0; }
+  /* 控件紧贴 label 左侧区域起点（左对齐），不再靠右 —— 与数字框左边缘一致 */
+  .frow > label + * { margin-left:0; }
+  /* 标签 nowrap + 可收缩，绝不逐字竖排 */
+  /* 固定 label 宽 → 同组内所有输入框左边缘严格对齐 */
+  .frow label { flex:0 0 132px; width:132px; font-size:13px;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:default; }
+  .frow input[type=number] { flex:0 0 auto; width:64px;
+    background:var(--bg); color:var(--text); border:1px solid var(--line);
+    border-radius:4px; padding:3px 6px; font-size:12px; text-align:right; }
+  .frow input[type=checkbox] { flex:0 0 auto; width:16px; height:16px; cursor:pointer; }
+  .infwrap { display:inline-flex; align-items:center; gap:5px; flex:0 0 auto; }
+  /* 所有输入控件从固定位置开始（label 132px 之后），天然左对齐 */
+  .frow input[type=number], .frow input[type=checkbox] { margin-left:0; }
+  .infhint { font-style:normal; font-size:10px; color:var(--dim); }
+
+  /* 菜单开关：多列密集排（每项短），不是一行一个 */
+  .menu-grid { display:grid; gap:2px 18px;
+    grid-template-columns:repeat(auto-fill, minmax(210px, 1fr)); }
+  .menu-grid .frow label { flex:1 1 auto; width:auto; min-width:0; }
+
+  .modal-foot { display:flex; align-items:center; justify-content:space-between;
+    padding:11px 16px; border-top:1px solid var(--line); }
+  .modal-foot .hint { font-size:12px; color:var(--dim); }
+
+  /* ---- 状态栏 ---- */
+  .status {
+    flex:none; display:flex; gap:24px; padding:0 12px; line-height:24px;
+    background:var(--panel); border-top:1px solid var(--line);
+    color:var(--dim); font-size:12px; overflow:hidden;
+  }
+  .status span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  .empty { padding:40px; color:var(--dim); text-align:center; }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <button id="back" title="返回上一个目录">← 返回</button>
+  <button id="up" title="上级目录">↑ 上级</button>
+  <span class="caption">路径</span>
+  <input id="path" type="text" value="C:\" spellcheck="false">
+  <button id="browse">浏览</button>
+  <button id="scan" class="primary">扫描</button>
+  <select id="mapSel" title="映射方法 g：作用在大小上的单值变换">
+    <option value="id">映射 g=x</option>
+    <option value="log">映射 g=log₂x</option>
+    <option value="log2">映射 g=log₂²x</option>
+    <option value="sqrt">映射 g=√x</option>
+    <option value="pow">映射 g=x^α</option>
+  </select>
+  <select id="ordSel" title="运算顺序：Σ=求和, g=上面的映射">
+    <option value="sumG">顺序 先和→g(Σx)</option>
+    <option value="Gsum">顺序 先 g→Σg(x)</option>
+  </select>
+  <span id="powWrap" style="display:none;align-items:center;gap:6px">
+    <input id="powA" type="range" min="0.1" max="1" step="0.05" value="0.5"
+           title="幂指数 α" style="width:90px">
+    <span id="powVal" style="font-size:12px;color:var(--dim)">0.50</span>
+  </span>
+  <button id="theme">浅色</button>
+  <button id="settingsBtn" title="设置">⚙ 设置</button>
+</div>
+
+<div class="modal-mask" id="setMask">
+  <div class="modal">
+    <div class="modal-head"><span>设置</span><button id="setClose" class="x">✕</button></div>
+    <div class="modal-body" id="setBody"></div>
+    <div class="modal-foot">
+      <span class="hint" id="setHint"></span>
+      <button id="setSave" class="primary">保存</button>
+    </div>
+  </div>
+</div>
+<div class="crumbs" id="crumbs"></div>
+
+<div class="main">
+  <div class="left">
+    <div class="head" id="head"></div>
+    <div class="list" id="list">
+      <div class="list-inner" id="listInner"></div>
+      <div class="list-pin" id="listPin"></div>
+    </div>
+  </div>
+  <div class="splitter" id="splitter" title="拖动调整左右比例"></div>
+  <div class="right" id="right"></div>
+</div>
+
+<div class="status" id="status">
+  <span id="st0">就绪</span>
+  <span id="st1"></span>
+  <span id="st2"></span>
+  <div id="progWrap" class="prog-wrap">
+    <div id="progBar" class="prog-bar"></div>
+    <span id="progTxt" class="prog-txt"></span>
+  </div>
+</div>
+
+<script>
+"use strict";
+// 全局错误上报到宿主日志（页面出错时能在 diskmate.log 里看到）
+window.onerror = function (msg, src, line, col, err) {
+  try {
+    post({ cmd: "diag", what: "jserr",
+           msg: String(msg), line: line, col: col,
+           stack: err && err.stack ? String(err.stack).slice(0, 300) : "" });
+  } catch (_) {}
+  return false;
+};
+window.addEventListener("unhandledrejection", e => {
+  try { post({ cmd:"diag", what:"jsrej", msg: String(e.reason) }); } catch (_) {}
+});
+
+// ===== 列定义（宽度与 C++ 无关，全部由前端控制）=====
+const COLS = [
+  { key:"name",  name:"名称",   w:"46%" },
+  { key:"size",  name:"大小",   w:"16%" },
+  { key:"pct",   name:"占比",   w:"12%" },
+  { key:"type",  name:"类型",   w:"14%" },
+  { key:"files", name:"文件数", w:"12%" },
+];
+
+const ROW_H = 30;              // 行高（与 CSS --row-h 一致）
+const state = {
+  root: null,                  // 当前根节点（整棵树）
+  current: null,               // 当前目录
+  view: [],                    // 当前目录的子项
+  rows: [],                    // 扁平化后的可见行（含展开）
+  expanded: new Set(),         // 展开的目录 id
+  sortKey: "size", sortAsc: false,
+  selectedId: null,            // 主选中（焦点项，键盘导航用）
+  selectedIds: new Set(),      // 多选集合（Ctrl/Shift 选入）
+  anchorIdx: null,             // Shift 范围选择的锚点行号
+};
+
+// ===== 工具 =====
+const fmtSize = n => {
+  const KB=1024, MB=KB*1024, GB=MB*1024, TB=GB*1024;
+  if (n < KB) return n + " B";
+  if (n < MB) return (n/KB).toFixed(1) + " KB";
+  if (n < GB) return (n/MB).toFixed(1) + " MB";
+  if (n < TB) return (n/GB).toFixed(2) + " GB";
+  return (n/TB).toFixed(2) + " TB";
+};
+const fmtCount = n => n.toLocaleString("zh-CN");
+const typeOf = node => node.isDir ? "文件夹"
+  : (node.name.match(/\.[^.]+$/) || ["文件"])[0];
+const esc = s => String(s).replace(/[&<>"]/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+// ===== 行构建（展开 → 扁平行）=====
+function buildRows() {
+  const out = [];
+  const total = state.current ? state.current.size : 0;
+
+  // ① 最顶层：「整个扫描的根目录」作为总体父集（depth 0）。
+  //    它始终展开，子项从 depth 1 开始 —— 这样层级线有共同的起点，
+  //    一眼就能看出当前内容属于哪个目录。
+  const root = state.rootNode || state.current;
+  const rootOpen = root ? state.expanded.has(root.id) : false;
+  if (root) {
+    out.push({ node: root, depth: 0, hasKids: true, expanded: rootOpen, isRoot: true });
+  }
+
+  // ② 「.. 返回上级」：让内联展开的目录也能退回（挂在根下面一级）
+  let baseDepth = 0;
+  if (root) baseDepth = 1;
+  if (state.current && state.current.parent) {
+    out.push({ node: state.current.parent, depth: baseDepth, hasKids: false,
+               expanded: false, up: true });
+  }
+
+  const walk = (node, depth) => {
+    const hasKids = node.isDir && node.children && node.children.length > 0;
+    out.push({ node, depth, hasKids, expanded: state.expanded.has(node.id) });
+    if (hasKids && state.expanded.has(node.id)) {
+      for (const c of sortItems(node.children)) walk(c, depth + 1);
+    }
+  };
+
+  if (root) {
+    // 根已单独占第一行：它自身是否展开决定是否列子项；同时把当前目录的子树铺开
+    const kids = sortItems(state.view);
+    if (rootOpen) for (const n of kids) walk(n, baseDepth);
+  } else {
+    for (const n of sortItems(state.view)) walk(n, 0);
+  }
+  state.rows = out.map(r => ({...r, total}));
+}
+
+function sortItems(arr) {
+  const k = state.sortKey, asc = state.sortAsc;
+  const cmp = (a,b) => {
+    let r = 0;
+    if (k === "name") r = a.name.localeCompare(b.name, "zh-CN");
+    else if (k === "size" || k === "pct") r = a.size - b.size;
+    else if (k === "files") r = a.fileCount - b.fileCount;
+    else r = typeOf(a).localeCompare(typeOf(b));
+    return asc ? r : -r;
+  };
+  return [...arr].sort(cmp);
+}
+
+// 只重画列表可视区（滚动时用这个 —— 不碰树图、不重建整棵树）
+// 生成单行 HTML（renderList 与悬浮固定行共用）。top 缺省为 i*ROW_H。
+function rowHtml(r, i, top) {
+  const node = r.node;
+  const pct = r.total ? (node.size / r.total * 100) : 0;
+  const sel = state.selectedIds.has(node.id) ? " selected" : "";
+  const tw = r.hasKids
+    ? `<span class="twist" data-twist="${i}" style="left:0;width:${ARROW}px;height:${ROW_H}px;line-height:${ROW_H}px">${r.expanded ? "▾" : "▸"}</span>`
+    : `<span class="twist empty" aria-hidden="true" style="left:0;width:${ARROW}px;height:${ROW_H}px;line-height:${ROW_H}px"></span>`;
+  const nm = r.up ? ".." : node.name;
+  const pctTxt = r.up ? "" : pct.toFixed(1) + "%";
+  const y = (top == null) ? (i * ROW_H) : top;
+  return `<div class="row${sel}" data-row="${i}" style="top:${y}px">`
+    + tw
+    + `<span class="nm" style="left:${NAME_X + r.depth * INDENT}px;width:${colW.nm - r.depth * INDENT}px">${treeLines(r)}<span class="nmtxt">${esc(nm)}</span></span>`
+    + `<span class="cd" style="left:${colX.size}px;width:${colW.size}px">${r.up ? "" : fmtSize(node.size)}</span>`
+    + `<span class="cd" style="left:${colX.pct}px;width:${colW.pct}px">${pctTxt}</span>`
+    + `<span class="cd" style="left:${colX.type}px;width:${colW.type}px">${r.up ? "" : esc(typeOf(node))}</span>`
+    + `<span class="cd" style="left:${colX.files}px;width:${colW.files}px">${r.up ? "" : fmtCount(node.fileCount)}</span>`
+    + `</div>`;
+}
+function renderList() {
+  const n = state.rows.length;
+  if (innerEl.dataset.count !== String(n)) {
+    // 绝对定位的内层必须有显式高度，滚动条才能正确工作
+    innerEl.style.height = Math.max(n * ROW_H, listEl.clientHeight) + "px";
+    innerEl.dataset.count = String(n);
+  }
+  const scrollTop = listEl.scrollTop;
+  const first = Math.max(0, Math.floor(scrollTop / ROW_H) - 2);
+  const visible = Math.ceil(listEl.clientHeight / ROW_H) + 4;
+  const last = Math.min(n, first + visible);
+
+  let html = "";
+  for (let i = first; i < last; i++) {
+    const r = state.rows[i];
+    const node = r.node;
+    const pct = r.total ? (node.size / r.total * 100) : 0;
+    const sel = state.selectedIds.has(node.id) ? " selected" : "";
+    // 文件行的箭头占位必须【有确定内容】：空 span 的 flex-basis 会被浏览器按
+    // 「内容」重新计算（实测撑到 80px），导致文件与目录差 58px 对不齐。
+    // 用同样的 ▸ 字符 + 隐藏（visibility 保留占位，width 也锁死）。
+    // 箭头列：固定在 left:0，width:ARROW
+    const tw = r.hasKids
+      ? `<span class="twist" data-twist="${i}" style="left:0;width:${ARROW}px;height:${ROW_H}px;line-height:${ROW_H}px">${r.expanded ? "▾" : "▸"}</span>`
+      : `<span class="twist empty" aria-hidden="true" style="left:0;width:${ARROW}px;height:${ROW_H}px;line-height:${ROW_H}px"></span>`;
+    const nm = r.up ? ".." : node.name;
+    const pctTxt = r.up ? "" : pct.toFixed(1) + "%";
+    // 一行 = 一层 flex。所有标签之间【不留任何空白】（换行/缩进都会变成
+    // 匿名文本 flex item，凭空多出几像素 → 行与行错位）。
+    // 所有列用绝对定位 + 手算 left/width。名字左边缘 = ARROW + depth*INDENT，
+    // 文件和目录走同一公式 → 必然对齐（不依赖任何 CSS 布局行为）。
+    // 列 x 位置：名称之后依次 大小/占比/类型/文件数，按百分比切剩余宽度。
+    html += `<div class="row${sel}" data-row="${i}" style="top:${i * ROW_H}px">`
+      + tw
+      + `<span class="nm" style="left:${NAME_X + r.depth * INDENT}px;width:${colW.nm - r.depth * INDENT}px">${treeLines(r)}<span class="nmtxt">${esc(nm)}</span></span>`
+      + `<span class="cd" style="left:${colX.size}px;width:${colW.size}px">${r.up ? "" : fmtSize(node.size)}</span>`
+      + `<span class="cd" style="left:${colX.pct}px;width:${colW.pct}px">${pctTxt}</span>`
+      + `<span class="cd" style="left:${colX.type}px;width:${colW.type}px">${r.up ? "" : esc(typeOf(node))}</span>`
+      + `<span class="cd" style="left:${colX.files}px;width:${colW.files}px">${r.up ? "" : fmtCount(node.fileCount)}</span>`
+      + `</div>`;
+  }
+  innerEl.innerHTML = html ||
+    `<div class="empty">还没有数据 — 输入路径后点「扫描」</div>`;
+
+  updatePinRow();
+}
+
+// ---- 悬浮固定行（吸顶）----
+// 规则：如果【可视区第一行】是某个展开目录的子项，就把那个目录行钉在列表顶部，
+// 让你始终看得到自己在哪个目录里。滚出它的子树范围就自动收起。
+function updatePinRow() {
+  const pin = document.getElementById("listPin");
+  if (!pin) return;
+  const n = state.rows.length;
+  if (!n) { pin.style.display = "none"; return; }
+
+  const scrollTop = listEl.scrollTop;
+  const firstIdx = Math.floor(scrollTop / ROW_H);
+
+  // 从可视区第一行往上找「最近的、已展开的祖先行」
+  let pinned = null;
+  for (let i = Math.min(firstIdx, n - 1); i >= 0; i--) {
+    const r = state.rows[i];
+    if (!r) continue;
+    // 该行必须是展开的目录，且首行确实落在它的子树内（depth 更深）
+    if (r.hasKids && r.expanded) {
+      const first = state.rows[firstIdx];
+      if (first && first.depth > r.depth) { pinned = { r, i }; }
+      break;
+    }
+  }
+  // 顶部那行本身是展开目录时不需要吸顶（它就在视野里）
+  const topRow = state.rows[firstIdx];
+  if (topRow && topRow.hasKids && topRow.expanded) pinned = null;
+
+  if (window.__PINDBG) {
+    post({ cmd:"diag", what:"pin", firstIdx, topDepth: state.rows[firstIdx]?.depth,
+           topName: state.rows[firstIdx]?.node?.name,
+           pinned: pinned ? pinned.r.node.name : null,
+           pinnedIdx: pinned ? pinned.i : -1, rows: n, scrollTop });
+  }
+  if (!pinned) { pin.style.display = "none"; pin.dataset.pinId = ""; return; }
+
+  const key = String(pinned.i);
+  if (pin.dataset.pinId !== key) {
+    pin.dataset.pinId = key;
+    pin.innerHTML = rowHtml(pinned.r, pinned.i, 0);
+  }
+  // fixed 定位：对齐到 .list 的内容区顶部
+  const lr = listEl.getBoundingClientRect();
+  pin.style.left = lr.left + "px";
+  pin.style.width = lr.width + "px";
+  pin.style.top = lr.top + "px";
+  pin.style.display = "block";
+}
+
+// 生成树形连接线（像资源管理器）。纯几何，和「根/子目录」无关：
+//
+//   对行 r（depth = D）：
+//     for d = 0 .. D-1：
+//       在 (D-d)*INDENT 处画一条竖线，代表第 d 层祖先的分支。
+//       · d < D-1  → 这条线只是「穿过」，画到行底（是否继续交给相邻行自己的线接上）
+//       · d == D-1 → 这条线是【本行连到自己父级】的那条：
+//                    本行是父级最后一个子项 → └（下半截不画）
+//                    否则                  → ├（下半截继续，接后面的兄弟）
+//
+// 「本行是最后一个子项吗」= 本行之后、在本层范围内还有没有同 depth 的行。
+function treeLines(r) {
+  if (!r.depth) return "";
+  const idx = state.rows.indexOf(r);
+  if (idx < 0) return "";
+  let html = "";
+  for (let d = 0; d < r.depth; d++) {
+    const xFromName = -(r.depth - d) * INDENT;   // 相对名字左边缘的偏移（负）
+    const isOwn = (d === r.depth - 1);           // 本行连到父级的那条
+    // 竖线是否继续向下：
+    //   · 本行自己那条（isOwn）→ 看本行后面还有没有同级行（depth = r.depth）
+    //   · 其它层         → 看第 d 层祖先之后还有没有同层行（depth = d）
+    const level = isOwn ? r.depth : d;
+    const more = moreAfter(idx, level, r.depth);
+    if (isOwn) {
+      html += `<i class="tl elbow${more ? "" : " end"}" style="left:${xFromName}px"></i>`;
+    } else if (more) {
+      html += `<i class="tl" style="left:${xFromName}px"></i>`;
+    }
+  }
+  return html;
+}
+
+// levelDepth：要判断的层号；rowDepth：当前行的层号（用于退出判断）
+function moreAfter(idx, levelDepth, rowDepth) {
+  for (let k = idx + 1; k < state.rows.length; k++) {
+    const d = state.rows[k].depth;
+    if (d < levelDepth) return false;      // 跳出该层 → 后面没有同层兄弟
+    if (d === levelDepth) return true;     // 找到同层兄弟
+  }
+  return false;
+}
+
+// ---- 列布局（唯一真源）：所有 x/宽度都在这里算，行和表头共用 ----
+const ARROW  = 22;   // 箭头列宽（与 CSS --arrow 一致）
+const INDENT = 16;   // 每层缩进
+const GAP    = 6;    // 列间距
+// 名称列从 ARROW 开始；其余列按剩余宽度的百分比切
+let NAME_X = ARROW, colW = {}, colX = {};
+
+// 列宽（可拖动）：单位 px，持久化到 localStorage。名称列吃掉剩余宽度。
+// w 是当前宽度（可拖）；def 是默认值。必须在定义时就把 def 赋给 w，
+// 否则 localStorage 里没有记录时 w 是 undefined → 列宽算成 0，列全挤在左边。
+const COL_DEFS = [
+  { k: "size",  title: "大小",   w: 110, def: 110, min: 56 },
+  { k: "pct",   title: "占比",   w: 80,  def: 80,  min: 48 },
+  { k: "type",  title: "类型",   w: 96,  def: 96,  min: 56 },
+  { k: "files", title: "文件数", w: 90,  def: 90,  min: 56 },
+];
+// 名称列宽（也由拖动决定，持久化）
+let nameW = 340;
+const NAME_MIN = 120;
+const SPLIT_MIN = 0.15;
+let splitFrac = 0.55;   // 左右分栏比例（可拖）
+
+function loadColPrefs() {
+  try {
+    const s = JSON.parse(localStorage.getItem("dm-cols") || "{}");
+    if (typeof s.nameW === "number") nameW = Math.max(NAME_MIN, s.nameW);
+    for (const d of COL_DEFS)
+      if (typeof s[d.k] === "number") d.w = Math.max(d.min, s[d.k]);
+    if (typeof s.split === "number")
+      splitFrac = Math.min(0.85, Math.max(SPLIT_MIN, s.split));
+  } catch (_) {}
+}
+function saveColPrefs() {
+  const s = { nameW, split: splitFrac };
+  for (const d of COL_DEFS) s[d.k] = d.w;
+  try { localStorage.setItem("dm-cols", JSON.stringify(s)); } catch (_) {}
+  // 同步进共用界面偏好 blob（ui-prefs.json）——ImGui 版读同一个文件，
+  // 于是列宽/分栏比例在两个前端之间也是共用的
+  prefs.cols = Object.assign({}, s);
+  savePrefs();
+}
+
+function layoutCols() {
+  NAME_X = ARROW;
+  // 名称列固定宽度（可拖），其余列各自固定宽度（可拖）；总宽超出就靠水平方向裁剪
+  colW.nm = Math.max(NAME_MIN, nameW);
+  let x = ARROW + colW.nm;
+  for (const d of COL_DEFS) {
+    colW[d.k] = d.w;
+    colX[d.k] = x + GAP;
+    x += d.w + GAP;
+  }
+}
+
+// ===== 渲染（只渲染可视区，虚拟滚动）=====
+const listEl = document.getElementById("list");
+const innerEl = document.getElementById("listInner");
+
+function render() {
+  buildRows();
+  layoutCols();                       // 先算列坐标，行和表头都用它
+  innerEl.dataset.count = "";        // 行数可能变了，强制下一行重设高度
+  renderList();
+
+  const head = document.getElementById("head");
+  // 表头：每列右侧带一个拖拽手柄（拖它改列宽，像资源管理器）
+  const hd = (label, x, w, i, key) =>
+    `<div class="hcell" style="left:${x}px;width:${w}px" data-key="${key}">${esc(label)}` +
+    `<span class="grip" data-col="${key}"></span></div>`;
+  head.innerHTML =
+      hd("名称", NAME_X, colW.nm, 0, "nm")
+    + hd("大小", colX.size, colW.size, 1, "size")
+    + hd("占比", colX.pct, colW.pct, 2, "pct")
+    + hd("类型", colX.type, colW.type, 3, "type")
+    + hd("文件数", colX.files, colW.files, 4, "files");
+
+  head.style.minWidth = "0";   // 不要强行加宽：会溢出到右侧树图上
+
+  // 内容就绪后播放一次淡入（restart 动画：先摘 class 再强制 reflow 再加回）
+  innerEl.classList.remove("anim");
+  void innerEl.offsetWidth;
+  innerEl.classList.add("anim");
+
+  document.getElementById("st1").textContent =
+    state.current ? `条目 ${fmtCount(state.rows.length)}` : "";
+  document.getElementById("st2").textContent =
+    state.current ? `总大小 ${fmtSize(state.current.size)}` : "";
+
+  renderTreemap();   // 右侧树图跟随数据一起刷新（滚动时不会走到这里）
+
+  post({ cmd:"diag", what:"rendered",
+         rows: state.rows.length,
+         domRows: document.querySelectorAll(".row").length,
+         treemap: tmLiveLeaves.length,
+         tmW: rightEl.clientWidth, tmH: rightEl.clientHeight,
+         arrows: document.querySelectorAll(".twist:not(.empty)").length,
+         cur: state.current ? state.current.name : "" });
+}
+
+let _rzT = null;
+window.addEventListener("scroll", () => {
+  if (typeof updatePinRow === "function") updatePinRow();
+}, true);
+window.addEventListener("resize", () => {
+  clearTimeout(_rzT);
+  _rzT = setTimeout(() => {
+    applySplit();      // 分栏宽度变了
+    render();          // 列坐标重算 + 重排（防止表头/行溢出到右侧）
+    renderTreemap();
+  }, 120);
+});
+
+// ===== 事件 =====
+// 滚动：只重画列表可视区（rAF 节流），绝不重烘焙树图
+let _scrollRaf = 0;
+listEl.addEventListener("scroll", () => {
+  if (_scrollRaf) return;
+  _scrollRaf = requestAnimationFrame(() => { _scrollRaf = 0; renderList(); });
+});
+
+// ===== 选择（支持 Ctrl / Shift 多选，行为对齐资源管理器）=====
+// 语义：
+//   · 普通点   → 只选这一项，清空其它；锚点 = 本行
+//   · Ctrl+点  → 本项在集合里就移除，不在就加入；锚点 = 本行
+//   · Shift+点 → 从锚点到本行【整段】选入（并清掉段外的）；锚点不变
+//   · Ctrl+Shift+点 → 段内每项按"加入"处理（不取消已有）
+function selectRow(idx, opt) {
+  const r = state.rows[idx];
+  if (!r) return;
+  const id = r.node.id;
+  const ctrl = !!(opt && opt.ctrl), shift = !!(opt && opt.shift);
+  const S = state.selectedIds;
+
+  if (shift && state.anchorIdx != null) {
+    const a = state.anchorIdx, b = idx;
+    const lo = Math.min(a, b), hi = Math.max(a, b);
+    if (!ctrl) S.clear();                    // 不带 Ctrl：整段替换现有选择
+    for (let k = lo; k <= hi; k++) {
+      const rr = state.rows[k];
+      if (rr) S.add(rr.node.id);
+    }
+  } else if (ctrl) {
+    if (S.has(id)) S.delete(id); else S.add(id);
+    state.anchorIdx = idx;
+  } else {
+    S.clear(); S.add(id);
+    state.anchorIdx = idx;
+  }
+  state.selectedId = id;                     // 焦点项（键盘导航/树图联动用它）
+  syncListSelection();
+  setTreemapSelection(id);
+}
+
+listEl.addEventListener("click", e => {
+  const tw = e.target.closest("[data-twist]");
+  if (tw) {
+    const r = state.rows[+tw.dataset.twist];
+    if (!r) return;
+    const id = r.node.id;
+    state.expanded.has(id) ? state.expanded.delete(id) : state.expanded.add(id);
+    render();
+    return;
+  }
+  const rowEl = e.target.closest("[data-row]");
+  if (rowEl) {
+    const idx = +rowEl.dataset.row;
+    const r = state.rows[idx];
+    if (r) selectRow(idx, { ctrl: e.ctrlKey, shift: e.shiftKey });
+  }
+});
+
+listEl.addEventListener("dblclick", e => {
+  const rowEl = e.target.closest("[data-row]");
+  if (!rowEl) return;
+  const r = state.rows[+rowEl.dataset.row];
+  if (!r) return;
+  if (r.up || r.node.isDir) {
+    const q = nodeCanvasRect(r.node);
+    if (q) pendingFlip = { x: q.x0, y: q.y0, w: q.w, h: q.h };
+    enter(r.node);
+  }
+  else post({ cmd:"open", path:nodeFullPath(r.node) });
+});
+
+document.getElementById("head").addEventListener("click", e => {
+  if (suppressHeadClick) { suppressHeadClick = false; return; }   // 刚拖过列宽，别排序
+  const d = e.target.closest("[data-key]");
+  if (!d) return;
+  const key = d.dataset.key;
+  const sk = (key === "nm") ? "name" : key;
+  if (sk === state.sortKey) state.sortAsc = !state.sortAsc;
+  else { state.sortKey = sk; state.sortAsc = (sk === "name"); }
+  render();
+});
+
+// 扫描/停止 按钮：扫描中变成「停止」，点了发 stop 并把按钮还原
+let scanning = false;
+let _lastTreeAt = 0;                 // 上次收到扫描结果的时刻（用于忽略迟到的 progress）
+let _scanT0 = 0, _scanBytes0 = 0, _scanItems0 = 0;   // 进度速度计算的基准
+const scanBtn = document.getElementById("scan");
+function setScanState(on) {
+  scanning = on;
+  scanBtn.textContent = on ? "停止" : "扫描";
+  scanBtn.classList.toggle("danger", on);
+  const w = document.getElementById("progWrap");
+  if (w) w.style.display = on ? "flex" : "none";
+}
+scanBtn.onclick = () => {
+  if (scanning) {
+    post({ cmd:"stop" });
+    setScanState(false);
+    document.getElementById("st0").textContent = "已停止";
+    return;
+  }
+  const p = document.getElementById("path").value.trim();
+  if (!p) return;
+  setScanState(true);
+  _scanT0 = 0;                      // 重置速度基准
+  document.getElementById("progTxt").textContent = "开始扫描…";
+  post({ cmd:"scan", path:p });
+};
+document.getElementById("browse").onclick = () => post({ cmd:"browse" });
+document.getElementById("back").onclick = goBack;
+document.getElementById("up").onclick = goUp;
+
+// 权重模式状态（两个维度；必须声明在使用之前，否则 TDZ 报错）
+//   mapKind：映射方法 g —— id(恒等) / log(对数) / log2(对数平方) / sqrt(开方) / pow(幂律)
+//   ordKind：运算顺序   —— sumG(先求和→再映射) / Gsum(先映射→求和)
+let mapKind = "sqrt";
+let ordKind = "Gsum";
+let powAlpha = 0.5;            // 幂律指数（mapKind === "pow" 时生效）
+let treemapLogScale = false;   // 兼容旧引用
+let _wCache = new WeakMap();
+function clearWeightCache() { _wCache = new WeakMap(); }
+// 组合成一个可比较/可缓存的键
+function weightKey() { return ordKind + "_" + mapKind + ":" + (mapKind === "pow" ? powAlpha : ""); }
+
+// 面积算法 = 「映射方法 g」×「运算顺序」
+const mapSel = document.getElementById("mapSel");
+const ordSel = document.getElementById("ordSel");
+const powWrap = document.getElementById("powWrap");
+const powA = document.getElementById("powA");
+const powVal = document.getElementById("powVal");
+mapSel.value = mapKind;
+ordSel.value = ordKind;
+function syncPowVis() {
+  powWrap.style.display = (mapKind === "pow") ? "inline-flex" : "none";
+}
+function onWeightChange() {
+  mapKind = mapSel.value;
+  ordKind = ordSel.value;
+  syncPowVis();
+  clearWeightCache();
+  renderTreemap(true);
+  prefs.mapKind = mapKind; prefs.ordKind = ordKind; savePrefs();
+}
+mapSel.onchange = onWeightChange;
+ordSel.onchange = onWeightChange;
+syncPowVis();
+powA.oninput = () => {
+  powAlpha = +powA.value;
+  powVal.textContent = powAlpha.toFixed(2);
+  clearWeightCache();
+  renderTreemap(true);
+};
+powA.onchange = () => { prefs.powAlpha = powAlpha; savePrefs(); };
+powVal.textContent = powAlpha.toFixed(2);
+
+// ===== 界面偏好（唯一真源在 JS；C++ 只当字符串存取）=====
+// 加任何界面设置都只改这里，不用碰 C++。
+let prefs = { theme: "dark", mapKind: "sqrt", ordKind: "sumG", powAlpha: 0.5 };
+function savePrefs() {
+  post({ cmd: "pref", op: "save", json: JSON.stringify(prefs) });
+}
+function applyPrefs() {
+  if (prefs.extMap) {
+    // 迁移：老版本配置缺的分类补默认（颜色/后缀），用户改过的保留
+    for (const k of Object.keys(extMap))
+      if (!prefs.extMap[k]) prefs.extMap[k] = extMap[k];
+    extMap = prefs.extMap;
+  }
+  if (prefs.extFallback) extFallback = prefs.extFallback;
+  if (prefs.theme === "light" || prefs.theme === "dark") applyTheme(prefs.theme);
+  if (["id","log","log2","sqrt","pow"].includes(prefs.mapKind)) mapKind = prefs.mapKind;
+  if (["sumG","Gsum"].includes(prefs.ordKind)) ordKind = prefs.ordKind;
+  if (typeof mapSel !== "undefined" && mapSel) mapSel.value = mapKind;
+  if (typeof ordSel !== "undefined" && ordSel) ordSel.value = ordKind;
+  if (typeof syncPowVis === "function") syncPowVis();
+  const a = +prefs.powAlpha;
+  if (!isNaN(a) && a >= 0.1 && a <= 1) {
+    powAlpha = a;
+    if (typeof powA !== "undefined" && powA) { powA.value = String(a); }
+    if (typeof powVal !== "undefined" && powVal) powVal.textContent = a.toFixed(2);
+  }
+  // 列宽/分栏比例（共用 blob；ImGui 版写的是同一组键）
+  if (prefs.cols) {
+    const c = prefs.cols;
+    if (typeof c.nameW === "number") nameW = Math.max(NAME_MIN, c.nameW);
+    for (const d of COL_DEFS)
+      if (typeof c[d.k] === "number") d.w = Math.max(d.min, c[d.k]);
+    if (typeof c.split === "number")
+      splitFrac = Math.min(0.85, Math.max(SPLIT_MIN, c.split));
+    try { localStorage.setItem("dm-cols", JSON.stringify({ nameW, split: splitFrac,
+      size: COL_DEFS[0].w, pct: COL_DEFS[1].w, type: COL_DEFS[2].w, files: COL_DEFS[3].w })); } catch (_) {}
+    if (typeof applySplit === "function") applySplit();
+    if (typeof render === "function") render();
+  }
+  clearWeightCache();
+  if (state.current) renderTreemap(true);
+}
+
+// 主题：CSS 变量切换
+function applyTheme(next) {
+  document.documentElement.setAttribute("data-theme", next);
+  document.getElementById("theme").textContent = next === "light" ? "深色" : "浅色";
+  renderTreemap(true);      // 颜色全变，强制重布局 + 重烘焙
+}
+document.getElementById("theme").onclick = () => {
+  const cur = document.documentElement.getAttribute("data-theme");
+  const next = cur === "light" ? "dark" : "light";
+  applyTheme(next);
+  prefs.theme = next; savePrefs();     // 存进偏好 blob
+};
+
+// 启动时恢复：localStorage 兜底（可能有），真实值由宿主在 ready 后推来
+try {
+  const saved = localStorage.getItem("dm-theme");
+  if (saved === "light" || saved === "dark") applyTheme(saved);
+} catch (_) {}
+
+// 供宿主通过 ExecuteScript 调用（备用路径；正常走 message 通道）
+
+// 宿主把「上次扫描过的路径」推过来时填进输入框
+window.__setPathFromHost = function (p) {
+  if (typeof p === "string" && p) {
+    document.getElementById("path").value = p;
+  }
+};
+
+// ===== 树图（右侧）：squarified treemap，纯 JS，布局随窗口大小即时重算 =====
+const rightEl = document.getElementById("right");
+
+// 面积权重：面积 ∝ f(size)。f 决定「大文件多大、小文件多小」。
+//
+//   线性    f = s                    比值 8万倍 → 小文件挤成线
+//   和的对数 f = log2(s+2)            log 吞加法（log(a+b)≈log(max)）→ 小文件贡献消失
+//   对数平方 f = log2²(s+2)           比对数拉开些，但同样吞加法
+//   平方根   f = √s                   次线性但【加法敏感】，推荐默认档
+//   幂律     f = s^α                   α ∈ [0.1,1] 连续可调：
+//                                       α=1 就是线性，α→0 趋近"所有块一样大"
+//   √s 与 s^0.5 等价；α 是唯一的调节旋钮，用来在「压缩量级」和「保留差异」间取平衡。
+
+// ===== 面积权重：由「变换 g」×「运算顺序」组合而成 =====
+//
+// 设目录 D 的后代文件为 f₁…fₙ，g 是单值变换（log₂、log₂²、√ 或恒等）：
+//
+//   ① sumG  先求和→再g    :  g(Σ size)          （只用节点自带的字节和，快）
+//   ② Gsum  先g→再求和    :  Σ g(size)          （每个文件各自贡献 → 小文件不被吞）
+//
+// 两种顺序 × 五种映射 g = 完整组合（用户指定：只有"先求和"和"先映射"两种顺序）。
+// 单值变换 g（结果必须有限且 > 0）
+function _G(kind, x) {
+  const v = Math.max(Number(x) || 0, 1);
+  let r;
+  if (kind === "log")  r = Math.log2(v + 2);
+  else if (kind === "log2") r = Math.pow(Math.log2(v + 2), 2);
+  else if (kind === "sqrt") r = Math.sqrt(v);
+  else if (kind === "pow")  r = Math.pow(v, (isFinite(powAlpha) ? powAlpha : 0.5));
+  else r = v;                                  // id
+  return (isFinite(r) && r > 0) ? r : 1;
+}
+
+// Gsum：目录 = Σ g(每个后代文件)
+function _Gsum(n, kind) {
+  const key = "Gsum:" + kind + ":" + powAlpha;
+  const hit = _wCache.get(n);
+  if (hit && hit.k === key) return hit.v;
+  let v;
+  if (n.children && n.children.length) {
+    v = 0;
+    for (const c of n.children) v += _Gsum(c, kind);
+    v = Math.max(v, _G(Math.max(n.size, 1)));  // 兜底：不小于自身的 g
+  } else {
+    v = _G(kind, n.size);
+  }
+  _wCache.set(n, { k: key, v });
+  return v;
+}
+
+function wOf(n) {
+  const s = Math.max(n.size, 1);
+  // 快路径：恒等 + 先求和 = 直接用字节和
+  if (mapKind === "id" && ordKind === "sumG") return s;
+  if (mapKind === "id" && ordKind === "Gsum") return s;      // Σsize 的叶子之和 = size
+  const key = weightKey();
+  const hit = _wCache.get(n);
+  if (hit && hit.k === key) return hit.v;
+  let w;
+  if (ordKind === "sumG")       w = _G(mapKind, s);              // g(Σsize)
+  else if (ordKind === "Gsum")  w = _Gsum(n, mapKind);           // Σg(leaf)
+  else                          w = _G(mapKind, _Gsum(n, mapKind));  // g(Σg(leaf))
+  // 【必须】权重必须有限且 > 0，否则矩形坐标变 NaN，
+  // 画布 createLinearGradient 会抛 "non-finite" → 整次重绘中断（踩过）
+  if (!isFinite(w) || w <= 0) {
+    if (!wOf._warned) {
+      wOf._warned = true;
+      post({ cmd:"diag", what:"badweight", name: n.name,
+             isDir: !!n.isDir, size: n.size, sizeType: typeof n.size,
+             mapKind: mapKind, ordKind: ordKind, got: String(w) });
+    }
+    w = 1;
+  }
+  _wCache.set(n, { k: key, v: w });
+  return w;
+}
+// 把一组节点转成带权重的布局项
+// 布局排序（关键）：同一层里先把【目录】按大到小排，再放【文件】按大到小。
+// 这样目录聚在左上、文件聚在右下，视觉上和资源管理器/ WizTree 一致，
+// 而不是大小混杂着铺。
+function sizedItems(arr) {
+  // 顺序由 C++ 端保证（目录优先 + size 降序），这里不再排序 —— 布局省掉几十万次 sort
+  return arr.map(n => ({ node: n, size: wOf(n) }));
+}
+
+// 把 items 铺满矩形 (x,y,w,h)：按 size 降序，每次沿短边切一条给当前项。
+// 保证互不重叠、不留空（最后一项吃掉剩余空间）。
+function packItems(items, x, y, w, h, out, depth, total, minSide) {
+  if (!items.length || w <= 0 || h <= 0) return;
+  const ms = minSide || 3;          // 小于这个边长的块不画（否则全是细长条）
+  const sum = items.reduce((s, it) => s + Math.max(it.size, 1), 0) || 1;
+  let cx = x, cy = y, cw = w, ch = h;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const frac = Math.max(it.size, 1) / sum;
+    if (i === items.length - 1) {
+      if (cw >= ms && ch >= ms)      // 最后一项吃掉剩余（只画得下才画）
+        out.push({ node: it.node, x: cx, y: cy, w: cw, h: ch, depth, frac });
+      break;
+    }
+    const a = frac * (w * h);
+    if (cw >= ch) {                  // 横着切一条（宽度按面积/高算）
+      const sw = Math.min(cw, a / ch);
+      if (sw >= ms && ch >= ms)
+        out.push({ node: it.node, x: cx, y: cy, w: sw, h: ch, depth, frac });
+      cx += sw; cw -= sw;
+    } else {                         // 竖着切一条
+      const sh = Math.min(ch, a / cw);
+      if (cw >= ms && sh >= ms)
+        out.push({ node: it.node, x: cx, y: cy, w: cw, h: sh, depth, frac });
+      cy += sh; ch -= sh;
+    }
+    if (cw < ms && ch < ms) break;   // 剩余空间太小，后面的都不画
+  }
+}
+
+function squarify(items, x, y, w, h, out, depth, maxDepth) {
+  // items: [{node, ...}] 已按 size 降序；铺满 (x,y,w,h)
+  if (!items.length || w <= 0 || h <= 0) return;
+  const total = items.reduce((s, it) => s + Math.max(it.size, 1), 0);
+  let area = w * h;
+
+  // 停的条件：没有子项 / 只剩 1 项 / 区域小到 1px 以下。
+  // 【注意】停的时候如果 items 还有多项，必须【全部输出】并把剩余空间按比例
+  // 分完 —— 只输出 items[0] 会把其余的丢掉，那片区域就是空白（用户报的"缺口"）。
+  if (!items.length) return;
+  if (items.length === 1) {
+    out.push({ node: items[0].node, x, y, w, h, depth,
+               frac: Math.max(items[0].size, 1) / total });
+    return;
+  }
+  if (w <= 0.01 || h <= 0.01) {
+    // 空间只剩一条：按面积把这条切分给所有剩余项（保证首尾相接、不留白）
+    const sum = items.reduce((s, it) => s + Math.max(it.size, 1), 0) || 1;
+    let cx = x, cy = y, cw = w, ch = h;
+    const horiz = w >= h;
+    for (let k = 0; k < items.length; k++) {
+      const it = items[k];
+      const f = Math.max(it.size, 1) / sum;
+      if (k === items.length - 1) {
+        out.push({ node: it.node, x: cx, y: cy, w: cw, h: ch, depth, frac: f });
+      } else if (horiz) {
+        const sw = cw * f;
+        out.push({ node: it.node, x: cx, y: cy, w: sw, h: ch, depth, frac: f });
+        cx += sw; cw -= sw;
+      } else {
+        const sh = ch * f;
+        out.push({ node: it.node, x: cx, y: cy, w: cw, h: sh, depth, frac: f });
+        cy += sh; ch -= sh;
+      }
+    }
+    return;
+  }
+
+  // squarified：逐行放入，直到长宽比开始变差
+  const row = [];
+  let rowArea = 0;
+  const worst = (r, side) => {
+    const sum = r.reduce((s, i) => s + Math.max(i.size, 1), 0) / total * area;
+    if (!sum || !side) return Infinity;
+    const side2 = sum / (side / (r.length ? 1 : 1)) ; // 占位
+    // 标准 squarify 的 worst ratio
+    let mx = 0, mn = Infinity;
+    for (const i of r) {
+      const a = Math.max(i.size, 1) / total * area;
+      mx = Math.max(mx, a); mn = Math.min(mn, a);
+    }
+    const s2 = sum * sum, side2_ = side * side;
+    return Math.max(side2_ * mx / s2, s2 / (side2_ * mn));
+  };
+
+  const shortSide = Math.min(w, h);
+  let i = 0;
+  const remaining = [...items];
+  while (i < remaining.length) {
+    const it = remaining[i];
+    const cur = row.concat([it]);
+    if (row.length === 0 || worst(cur, shortSide) <= worst(row, shortSide)) {
+      row.push(it);
+      rowArea += Math.max(it.size, 1);
+      i++;
+    } else {
+      break;
+    }
+  }
+  if (row.length === 0) { row.push(remaining[0]); rowArea = Math.max(remaining[0].size, 1); i = 1; }
+
+  // 放置 row：沿短边铺一条
+  const frac = rowArea / total;
+  const isWide = w >= h;
+  if (isWide) {
+    const rw = area * frac / h;
+    let cy = y;
+    for (const it of row) {
+      const ih = h * (Math.max(it.size, 1) / rowArea);
+      out.push({ node: it.node, x, y: cy, w: rw, h: ih,
+                 depth, frac: Math.max(it.size, 1) / total });
+      cy += ih;
+    }
+    squarify(remaining.slice(i), x + rw, y, w - rw, h, out, depth, maxDepth);
+  } else {
+    const rh = area * frac / w;
+    let cx = x;
+    for (const it of row) {
+      const iw = w * (Math.max(it.size, 1) / rowArea);
+      out.push({ node: it.node, x: cx, y, w: iw, h: rh,
+                 depth, frac: Math.max(it.size, 1) / total });
+      cx += iw;
+    }
+    squarify(remaining.slice(i), x, y + rh, w, h - rh, out, depth, maxDepth);
+  }
+}
+
+// ---- Canvas 树图 ----
+// DOM 元素画几万个块会卡死；canvas 一次绘制，交互靠矩形命中测试。
+// 性能关键：整图烘焙到离屏 canvas（bakeTreemap），选中变化时只贴图 + 画选中框
+// （paintTreemap），避免每次点击都重画几万个块。
+let tmCanvas = null, tmCtx = null, tmLeaves = [], tmPathCache = [];
+let tmCanvasGL = null, gl = null, glProg = null, glBuf = null, glIdx = null,
+    glU = {}, glOk = false;
+let tmBaked = null, tmBakedW = 0, tmBakedH = 0, tmBakedDirty = true;
+let dirRects = [];          // 目录占据的区域（画浅灰外框用）
+let tmDpr = 1;              // 当前 canvas 的物理/逻辑像素比（用于把 1 物理像素换算成逻辑线宽）
+let tmSelId = null, tmHoverId = null;
+
+// ---- 视口模式 ----
+// 布局只算一次（整棵树，坐标在「虚拟大坐标系」里）。进目录不重排，只把
+// 目标目录的矩形仿射映射到画布 —— 子块相对位置天然不变的「纯放大」。
+//   tmAllLeaves : 整棵树的所有叶子块（带 ancestors 祖先 id 链）
+//   tmAllDirs   : 整棵树的所有目录矩形（含它的子树包围盒）
+//   tmBox       : 当前可视的坐标系矩形（进入 current 时 = 它的矩形）
+let tmAllLeaves = [], tmAllDirs = [];
+// 每次布局递增的「代次」：块矩形直接挂在节点对象上（见 collectLeaves），
+// 代次不匹配说明这个节点在本轮布局里没有被放置 → 矩形作废。
+let tmBlockGen = 0;
+let tmBox = null;           // {x,y,w,h} 当前视口覆盖的坐标区域（null = 未布局）
+let tmLiveLeaves = [];      // 当前视口内【可见】的叶子块（绘制/命中都用它）
+let tmLiveDirs = [];        // 当前视口内的目录矩形
+let tmView = { k: 1, tx: 0, ty: 0 };   // 坐标→画布 的仿射：canvas = (coord - box.xy) * k
+// drawGL 的实例缓冲缓存（见 drawGL：只在布局/主题/尺寸变化时重建）
+let tmGlData = null, tmGlDataN = -1, tmGlW = -1, tmGlH = -1, tmGlDark = null, tmGlDirty = true;
+
+// 布局/烘焙超采样倍数：虚拟画布 = 窗口分辨率 × 4。
+// 树图在 4× 逻辑坐标系里铺块，collectLeaves/squarify 的像素阈值
+// （3px/2px/1px）对应的显示尺寸缩到 1/4 —— 小文件不再因「不足 3px」被截断，
+// 放大后依然有矩形（之前布局采样 = 窗口像素，小块被丢，放大即大片空白）。
+const LAY_SCALE = 4;
+function ensureCanvas() {
+  if (!tmCanvas) {
+    rightEl.innerHTML = "";
+    rightEl.style.position = "relative";
+    // 底层：WebGL 色块（GPU 实例化 + 片元着色器渐变）
+    tmCanvasGL = document.createElement("canvas");
+    tmCanvasGL.style.cssText = "position:absolute;inset:0;display:block;width:100%;height:100%;";
+    rightEl.appendChild(tmCanvasGL);
+    // 上层：2D 文字 + 高亮框
+    tmCanvas = document.createElement("canvas");
+    tmCanvas.style.cssText = "position:absolute;inset:0;display:block;width:100%;height:100%;";
+    rightEl.appendChild(tmCanvas);
+    tmCtx = tmCanvas.getContext("2d");
+    initGL();
+  }
+  // 真实设备像素比：WebView2 在 DPI 感知模式下 devicePixelRatio 可能仍是 1，
+  // 而系统缩放是 1.5 —— 只按 devicePixelRatio 建画布会低于物理像素 → 发糊。
+  // 取两者较大值，保证画布分辨率 >= 物理像素。
+  const dpr = Math.max(window.devicePixelRatio || 1, window.__hostScale || 1);
+  tmDpr = dpr;
+  document.documentElement.style.setProperty("--dpr", String(dpr));
+  const W = rightEl.clientWidth, H = rightEl.clientHeight;
+  const wpx = Math.round(W * dpr), hpx = Math.round(H * dpr);
+  if (tmCanvas.width !== wpx || tmCanvas.height !== hpx) {
+    tmCanvas.width = wpx; tmCanvas.height = hpx;
+    if (tmCanvasGL) { tmCanvasGL.width = wpx; tmCanvasGL.height = hpx; }
+  }
+  tmCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { W, H };
+}
+
+// ===== WebGL2 树图渲染器：矩形 = 2 三角形（实例化），片元着色器做对角渐变 =====
+// 每实例 8 float：x,y,w,h + r,g,b + isDirFlag → 一次性上传，一次 drawElementsInstanced。
+// GPU 并行填充所有像素，24 万矩形（48 万三角形）一次 draw 毫秒级完成。
+function rgb01(hex) {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return [0.35, 0.39, 0.45];
+  const v = parseInt(m[1], 16);
+  return [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255];
+}
+function initGL() {
+  glOk = false;
+  try {
+    gl = tmCanvasGL.getContext("webgl2",
+      { antialias: false, alpha: false, depth: false, stencil: false,
+        preserveDrawingBuffer: !!window.__LAYERS });
+    if (!gl) { gl = null; return; }
+    const vs = `#version 300 es
+layout(location=0) in vec4 aRect;
+layout(location=1) in vec4 aColor;
+uniform vec2 uScale; uniform vec2 uTrans; uniform vec2 uRes;
+out vec2 vUV; out vec4 vColor;
+void main() {
+  int corner = gl_VertexID & 3;
+  vec2 pos = aRect.xy + vec2((corner == 1 || corner == 2) ? aRect.z : 0.0,
+                             (corner >= 2) ? aRect.w : 0.0);
+  vUV = vec2((corner == 1 || corner == 2) ? 1.0 : 0.0, (corner >= 2) ? 1.0 : 0.0);
+  vColor = aColor;
+  vec2 px = pos * uScale + uTrans;
+  // 画布坐标 Y 向下，NDC 的 Y 向上 —— 必须翻转，否则色块层整体上下颠倒，
+  // 与 2D 焦点框/边框错位（用户报的"整个图上下反过来 / 完全不一致"）。
+  gl_Position = vec4(px.x / uRes.x * 2.0 - 1.0,
+                     (uRes.y - px.y) / uRes.y * 2.0 - 1.0,
+                     0.0, 1.0);
+}`;
+    const fs = `#version 300 es
+precision highp float;
+in vec2 vUV; in vec4 vColor;
+uniform float uDark;
+out vec4 o;
+vec3 lit(vec3 c, float a) { return clamp(c + a, 0.0, 1.0); }
+void main() {
+  vec3 base = vColor.rgb;
+  vec3 c0 = lit(base, uDark > 0.5 ? 0.22 : 0.16);
+  vec3 c1 = lit(base, uDark > 0.5 ? -0.15 : -0.11);
+  vec3 c = mix(c0, c1, (vUV.x + vUV.y) * 0.5);
+  vec2 d = max(fwidth(vUV), vec2(0.0001));
+  float top = smoothstep(0.0, d.y * 1.6, vUV.y);
+  float bot = smoothstep(0.0, d.y * 1.6, 1.0 - vUV.y);
+  float lef = smoothstep(0.0, d.x * 1.6, vUV.x);
+  float rig = smoothstep(0.0, d.x * 1.6, 1.0 - vUV.x);
+  c += vec3(0.06) * (top + lef) - vec3(0.05) * (bot + rig);
+  o = vec4(clamp(c, 0.0, 1.0), 1.0);
+}`;
+    const vsH = gl.createShader(gl.VERTEX_SHADER);
+    gl.shaderSource(vsH, vs); gl.compileShader(vsH);
+    const fsH = gl.createShader(gl.FRAGMENT_SHADER);
+    gl.shaderSource(fsH, fs); gl.compileShader(fsH);
+    glProg = gl.createProgram();
+    gl.attachShader(glProg, vsH); gl.attachShader(glProg, fsH);
+    gl.linkProgram(glProg);
+    if (!gl.getShaderParameter(vsH, gl.COMPILE_STATUS) || !gl.getShaderParameter(fsH, gl.COMPILE_STATUS)) {
+      post({ cmd:"diag", what:"gl", ok:false, why:"compile",
+             vs: gl.getShaderInfoLog(vsH) || "", fs: gl.getShaderInfoLog(fsH) || "" });
+      gl = null; return;
+    }
+    if (!gl.getProgramParameter(glProg, gl.LINK_STATUS)) {
+      post({ cmd:"diag", what:"gl", ok:false, why:"link",
+             vs: gl.getShaderInfoLog(vsH) || "", fs: gl.getShaderInfoLog(fsH) || "" });
+      gl = null; return;
+    }
+    glU.scale = gl.getUniformLocation(glProg, "uScale");
+    glU.trans = gl.getUniformLocation(glProg, "uTrans");
+    glU.res   = gl.getUniformLocation(glProg, "uRes");
+    glU.dark  = gl.getUniformLocation(glProg, "uDark");
+    glBuf = gl.createBuffer();
+    glIdx = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, glIdx);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array([0, 1, 2, 0, 2, 3]), gl.STATIC_DRAW);
+    glOk = true;
+  } catch (e) { gl = null; glOk = false; }
+}
+function drawGL() {
+  if (!glOk) return;
+  const { W, H } = ensureCanvas();
+  const dark = document.documentElement.getAttribute("data-theme") !== "light";
+  const n = tmLiveLeaves.length;
+  // ⚡ 实例数据只在【布局/主题/尺寸】变化时重建（bakeView 会把 tmGlDirty 置位）。
+  //    旧实现每次绘制都新建 n×8 的 Float32Array（84.6 万块 = 27MB）并全量上传，
+  //    于是「鼠标移到一个新块」= 一次 27MB 重建 → 这就是悬停卡顿的另一半原因。
+  if (tmGlDirty || tmGlDataN !== n || tmGlW !== W || tmGlH !== H || tmGlDark !== dark) {
+    const data = new Float32Array(n * 8);
+    for (let i = 0; i < n; i++) {
+      const r = tmLiveLeaves[i];
+      const base = r.node.isDir ? (dark ? "#3a4250" : "#c8cfd8") : extColor(r.node.name);
+      const c = rgb01(base);
+      const o = i * 8;
+      data[o] = r.x; data[o + 1] = r.y; data[o + 2] = r.w; data[o + 3] = r.h;
+      data[o + 4] = c[0]; data[o + 5] = c[1]; data[o + 6] = c[2];
+      data[o + 7] = r.node.isDir ? 1 : 0;
+    }
+    tmGlData = data; tmGlDataN = n; tmGlW = W; tmGlH = H; tmGlDark = dark;
+    tmGlDirty = false;
+    gl.bindBuffer(gl.ARRAY_BUFFER, glBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+  } else {
+    gl.bindBuffer(gl.ARRAY_BUFFER, glBuf);
+  }
+  gl.useProgram(glProg);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 32, 0);
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 32, 16);
+  gl.vertexAttribDivisor(0, 1);
+  gl.vertexAttribDivisor(1, 1);
+  gl.uniform2f(glU.scale, tmView.k, tmView.k);
+  gl.uniform2f(glU.trans, tmView.tx, tmView.ty);
+  gl.uniform2f(glU.res, W, H);
+  gl.uniform1f(glU.dark, dark ? 1 : 0);
+  gl.viewport(0, 0, Math.round(W * tmDpr), Math.round(H * tmDpr));
+  const bg = dark ? [0.169, 0.192, 0.231] : [0.910, 0.925, 0.945];
+  gl.clearColor(bg[0], bg[1], bg[2], 1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  if (n) gl.drawElementsInstanced(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0, n);
+}
+
+// 2D 叠加层：目录外框 + 文字 + 高亮框（色块已在 WebGL 层）
+function paintOverlay2D(suppressHover) {
+  if (!tmCtx) return;
+  const { W, H } = ensureCanvas();
+  tmCtx.clearRect(0, 0, W, H);
+  // ---- 目录外框（1 物理像素；只画最外一层） ----
+  {
+    const lw = 1 / tmDpr;
+    tmCtx.fillStyle = "rgba(190,196,206,.55)";
+    const curDepth = tmLiveDirs.length ? Math.min(...tmLiveDirs.map(d => d.depth)) : 0;
+    for (const d of tmLiveDirs) {
+      if (d.depth !== curDepth) continue;
+      const ax = Math.round(vx(d.x)), ay = Math.round(vy(d.y));
+      const bx = Math.round(vx(d.x + d.w)), by = Math.round(vy(d.y + d.h));
+      if (bx - ax < 8 || by - ay < 8) continue;
+      tmCtx.fillRect(ax, ay, bx - ax, lw);
+      tmCtx.fillRect(ax, by - lw, bx - ax, lw);
+      tmCtx.fillRect(ax, ay, lw, by - ay);
+      tmCtx.fillRect(bx - lw, ay, lw, by - ay);
+    }
+  }
+  // ---- 文字 ----
+  {
+    const TM_FONT = "12px 'Microsoft YaHei', 'Microsoft YaHei UI', sans-serif";
+    const TM_FONT_SM = "11px 'Microsoft YaHei', 'Microsoft YaHei UI', sans-serif";
+    tmCtx.textBaseline = "top";
+    for (const r of tmLiveLeaves) {
+      const n = r.node;
+      const x0 = vx(r.x), y0 = vy(r.y);
+      const w = vx(r.x + r.w) - x0, h = vy(r.y + r.h) - y0;
+      if (w < 34 || h < 18) continue;
+      tmCtx.save();
+      tmCtx.beginPath();
+      tmCtx.rect(x0, y0, w, h);
+      tmCtx.clip();
+      const pad = 3;
+      const availW = w - pad * 2;
+      if (availW > 14 && h >= 16) {
+        tmCtx.font = w >= 110 ? TM_FONT : TM_FONT_SM;
+        const name = fitText(tmCtx, n.name, availW);
+        if (name) {
+          tmCtx.fillStyle = "#fff";
+          tmCtx.fillText(name, x0 + pad, y0 + pad + 1);
+        }
+        if (h >= 34 && w >= 110) {
+          const sz = fitText(tmCtx, fmtSize(n.size), availW);
+          if (sz) {
+            tmCtx.fillStyle = "rgba(255,255,255,.92)";
+            tmCtx.fillText(sz, x0 + pad, y0 + pad + 16);
+          }
+        }
+      }
+      tmCtx.restore();
+    }
+  }
+  // ---- 高亮框：优先 滚轮框选(wheel) > 悬停 > 选中 ----
+  const drawHl = (id, fill, stroke) => {
+    let R = null;
+    const u = unionRectOf(id);   // O(1)：文件=它自己的块；目录=它自己的块（子块铺满它）
+    if (u) R = { x0: u.x0, y0: u.y0, w: u.x1 - u.x0, h: u.y1 - u.y0 };
+    if (!R || R.w < 1 || R.h < 1) return null;
+    const { x0, y0, w, h } = R;
+    const RR = { x0, y0, x1: x0 + w, y1: y0 + h };
+    if (fill) { tmCtx.fillStyle = fill; tmCtx.fillRect(x0, y0, w, h); }
+    const lpw = 1 / tmDpr;
+    tmCtx.fillStyle = stroke;
+    tmCtx.fillRect(x0, y0, w, lpw);
+    tmCtx.fillRect(x0, y0 + h - lpw, w, lpw);
+    tmCtx.fillRect(x0, y0, lpw, h);
+    tmCtx.fillRect(x0 + w - lpw, y0, lpw, h);
+    return RR;
+  };
+  if (!suppressHover) {
+    const id = (tmHoverId != null) ? tmHoverId : tmSelId;
+    if (id != null) {
+      const R = drawHl(id, null, tmHoverId != null ? "rgba(255,255,255,.85)"
+                                                   : "rgba(255,255,255,.95)");
+      if (R) drawInfoLabel(tmCtx, R, findNodeById(id), W, H);
+    }
+  }
+}
+
+// ===== 视口模式 =====
+// 布局【一次】算完整棵树（坐标在虚拟大坐标系里，各层坐标是父子嵌套的）。
+// 进入目录不重排：只把该目录的矩形仿射映射到画布 —— 子块相对位置天然不变。
+//
+// 三个函数分工：
+//   layoutAll()    整树布局（数据/尺寸/主题变化时跑一次）
+//   updateView()   由 state.current 推出视口 tmBox + tmView，并筛出可见块
+//   bakeView()     按当前视口把可见块烘焙到离屏 canvas
+function layoutAll(depthCap) {
+  const { W: dW, H: dH } = ensureCanvas();
+  const W = dW * LAY_SCALE, H = dH * LAY_SCALE;   // 4× 虚拟画布（保证小块几何）
+  tmBlockGen++;                  // 本轮布局的新代次：上一轮的块矩形全部作废
+  clearWeightCache();            // 树/懒加载变了 → 权重要重算
+  tmAllLeaves = []; tmAllDirs = [];
+  const root = state.current || state.root;
+  if (!root) { tmBox = null; tmLiveLeaves = []; tmLiveDirs = []; return; }
+  // 【布局以当前目录为根】截断阈值是相对的：父级上被截断（占位）的目录，
+  // 进入它之后整棵子树按当前画布重新铺满 —— 之前丢掉的子块全部显示。
+  // 不再按 size>0 过滤（空文件也要有最小矩形，否则目录内出现空洞）。
+  const kids = root.children || [];
+  if (!kids.length) { tmBox = null; tmLiveLeaves = []; tmLiveDirs = []; return; }
+  collectLeaves(kids, 0, 0, W, H, tmAllLeaves, 0, [root.id], depthCap);
+}
+
+// 由当前目录推出视口：tmBox = 该目录占据的坐标矩形（根 = 整块虚拟画布）
+function updateView() {
+  const { W: dW, H: dH } = ensureCanvas();
+  const W = dW * LAY_SCALE, H = dH * LAY_SCALE;   // 逻辑坐标 4×
+  if (!state.current || !tmAllLeaves.length) {
+    tmBox = null; tmLiveLeaves = []; tmLiveDirs = [];
+    return;
+  }
+  // 布局已以当前目录为根铺满整画布 → 视口恒为整画布（进入目录 = 重布局该目录）
+  let box = { x: 0, y: 0, w: W, h: H };
+  if (box.w < 1 || box.h < 1) box = { x: 0, y: 0, w: W, h: H };
+  if (!isFinite(box.x) || !isFinite(box.y) || !isFinite(box.w) || !isFinite(box.h))
+    box = { x: 0, y: 0, w: W, h: H };
+  if (_progActive && !_viewLockBox) _viewLockBox = box;   // 渐进第一轮：锁定视口
+  // 诊断：进去了但视口仍是整画布 → 说明该目录在布局里找不到（子项未加载）
+  post({ cmd:"diag", what:"view",
+    cur: state.current ? state.current.name : "",
+    found: tmAllLeaves.some(l => l.chain.includes(state.current ? state.current.id : -1)),
+    kids: state.current && state.current.children ? state.current.children.length : -1,
+    dirCount: state.current ? state.current.dirCount : -1,
+    box: [Math.round(box.x), Math.round(box.y), Math.round(box.w), Math.round(box.h)],
+    W, H });
+  tmBox = box;
+  // 坐标→画布：等比缩放（保持长宽比，避免块变形），居中
+  // 注意：box 是 4× 逻辑坐标，映射目标是显示尺寸 dW/dH
+  const k = Math.min(dW / box.w, dH / box.h);
+  tmView.k = k;
+  tmView.tx = (dW - box.w * k) / 2 - box.x * k;
+  tmView.ty = (dH - box.h * k) / 2 - box.y * k;
+
+  // 全部叶子都属于当前目录（布局即当前目录的子树）
+  tmLiveLeaves = tmAllLeaves;
+  tmLiveDirs = tmAllDirs;
+  dirRects = tmLiveDirs;
+}
+
+// 坐标 → 画布（逻辑坐标）
+function vx(x) { return tmView.tx + x * tmView.k; }
+function vy(y) { return tmView.ty + y * tmView.k; }
+
+// 按当前视口烘焙
+function bakeView() {
+  post({ cmd:"diag", what:"bakeEnter" });
+  const { W, H } = ensureCanvas();
+  tmGlDirty = true;         // 布局/尺寸/主题变了 → drawGL 的实例缓冲需要重建
+  if (glOk) {
+    // GPU 路径：色块由 WebGL 实例化绘制（片元着色器对角渐变），
+    // 外框/文字/高亮由 2D 叠加层画。24 万矩形一次 draw 毫秒级。
+    const _tb0 = performance.now();
+    drawGL();
+    const _tb1 = performance.now();
+    paintOverlay2D(false);
+    const _tb2 = performance.now();
+    if (!window.__perfLogged) {
+      window.__perfLogged = true;
+      post({ cmd:"diag", what:"perf", drawMs: Math.round(_tb1 - _tb0),
+             overlayMs: Math.round(_tb2 - _tb1) });
+    }
+    tmBakedW = W; tmBakedH = H; tmBakedDirty = false;
+    tmSelId = state.selectedId;
+    tmHoverId = null;
+    // 两层几何实证：canvas CSS rect + 最大文件块的两层像素坐标
+    try {
+      const r1 = tmCanvasGL.getBoundingClientRect(), r2 = tmCanvas.getBoundingClientRect();
+      const big = tmLiveLeaves.filter(r => !r.node.isDir)
+        .sort((a,b) => (b.w*b.h)-(a.w*a.h))[0];
+      let pos = null;
+      if (big) {
+        const px = vx(big.x), py = vy(big.y), pw = vx(big.x+big.w)-px, ph = vy(big.y+big.h)-py;
+        const k2 = tmView.k, txx = tmView.tx, tyy = tmView.ty;
+        const gx = (big.x*k2+txx), gy = (big.y*k2+tyy);
+        pos = { name: big.node.name, logical: [Math.round(px),Math.round(py),Math.round(pw),Math.round(ph)],
+                glNDC: [gx/W, gy/H, (gx+big.w*k2)/W, (gy+big.h*k2)/H] };
+      }
+      post({ cmd:"diag", what:"layers",
+             glRect: [Math.round(r1.x),Math.round(r1.y),Math.round(r1.width),Math.round(r1.height)],
+             d2Rect: [Math.round(r2.x),Math.round(r2.y),Math.round(r2.width),Math.round(r2.height)],
+             canvasW: [tmCanvasGL.width, tmCanvas.width], layersFlag: !!window.__LAYERS, dpr: tmDpr,
+             viewport: [W, H], pos });
+      if (window.__LAYERS) {
+        try {
+          const glUrl = tmCanvasGL.toDataURL("image/png");
+          const d2Url = tmCanvas.toDataURL("image/png");
+          post({ cmd:"diag", what:"glpng", url: glUrl });
+          post({ cmd:"diag", what:"d2png", url: d2Url });
+        } catch (e2) { post({ cmd:"diag", what:"layers", err2: String(e2) }); }
+      }
+    } catch (e) { post({ cmd:"diag", what:"layers", err: String(e) }); }
+    return;
+  }
+  const dark = document.documentElement.getAttribute("data-theme") !== "light";
+  const dpr = Math.max(window.devicePixelRatio || 1, window.__hostScale || 1);
+  tmBaked = document.createElement("canvas");
+  tmBaked.width = Math.round(W * dpr * LAY_SCALE);
+  tmBaked.height = Math.round(H * dpr * LAY_SCALE);
+  const g = tmBaked.getContext("2d");
+  g.setTransform(dpr * LAY_SCALE, 0, 0, dpr * LAY_SCALE, 0, 0);
+  g.clearRect(0, 0, W, H);
+
+  // 当前目录自身的底色（它就是整块画布）
+  if (state.current) {
+    g.fillStyle = dark ? "#2b313b" : "#e8ecf1";
+    g.fillRect(0, 0, W, H);
+  }
+
+  // ---- 色块 ----
+  // 【关键】视口映射后坐标是浮点，直接 fillRect 会在相邻块之间留亚像素缝隙，
+  // 放大后就是一道道「规整的缺口」。做法：每个块向外多画 0.5px 盖住缝
+  // （重叠不会看错，因为后画的块会盖住前一个的这条边）。
+  const fadeDepth = (typeof _progFadeDepth === "number") ? _progFadeDepth : Infinity;
+  for (const r of tmLiveLeaves) {
+    const n = r.node;
+    const x0 = vx(r.x), y0 = vy(r.y);
+    const x1 = vx(r.x + r.w), y1 = vy(r.y + r.h);
+    const w = x1 - x0, h = y1 - y0;
+    if (w < 0.1 || h < 0.1) continue;
+    const base = n.isDir ? (dark ? "#3a4250" : "#c8cfd8") : extColor(n.name);
+    g.fillStyle = base;    // 纯色（去每块 linearGradient → 烘焙快 ~10 倍）
+    // 本轮新出现的层（深度更深）先半透明淡入，下一轮才实色 → 渐变生长
+    if (r.depth >= fadeDepth) g.globalAlpha = 0.45;
+    // 左/上各外扩 0.5，宽高各 +1 → 覆盖相邻块之间的浮点缝
+    g.fillRect(x0 - 0.5, y0 - 0.5, w + 1, h + 1);
+    g.globalAlpha = 1.0;
+  }
+  // ---- 目录外框（1 物理像素；只画最外一层，避免层层叠加） ----
+  {
+    const lw = 1 / tmDpr;
+    g.fillStyle = "rgba(190,196,206,.55)";
+    const curDepth = tmLiveDirs.length ? Math.min(...tmLiveDirs.map(d => d.depth)) : 0;
+    for (const d of tmLiveDirs) {
+      if (d.depth !== curDepth) continue;
+      const ax = Math.round(vx(d.x)), ay = Math.round(vy(d.y));
+      const bx = Math.round(vx(d.x + d.w)), by = Math.round(vy(d.y + d.h));
+      if (bx - ax < 8 || by - ay < 8) continue;
+      g.fillRect(ax, ay, bx - ax, lw);
+      g.fillRect(ax, by - lw, bx - ax, lw);
+      g.fillRect(ax, ay, lw, by - ay);
+      g.fillRect(bx - lw, ay, lw, by - ay);
+    }
+  }
+  // ---- 文字 ----
+  const TM_FONT = "12px 'Microsoft YaHei', 'Microsoft YaHei UI', sans-serif";
+  const TM_FONT_SM = "11px 'Microsoft YaHei', 'Microsoft YaHei UI', sans-serif";
+  g.textBaseline = "top";
+  for (const r of tmLiveLeaves) {
+    const n = r.node;
+    const x0 = vx(r.x), y0 = vy(r.y);
+    const w = vx(r.x + r.w) - x0, h = vy(r.y + r.h) - y0;
+    if (w < 34 || h < 18) continue;
+    g.save();
+    g.beginPath();
+    g.rect(x0, y0, w, h);
+    g.clip();
+    const pad = 3;
+    const availW = w - pad * 2;
+    if (availW > 14 && h >= 16) {
+      g.font = w >= 110 ? TM_FONT : TM_FONT_SM;
+      const name = fitText(g, n.name, availW);
+      if (name) {
+        g.fillStyle = "#fff";
+        g.fillText(name, x0 + pad, y0 + pad + 1);
+      }
+      if (h >= 34 && w >= 110) {
+        const sz = fitText(g, fmtSize(n.size), availW);
+        if (sz) {
+          g.fillStyle = "rgba(255,255,255,.92)";
+          g.fillText(sz, x0 + pad, y0 + pad + 16);
+        }
+      }
+    }
+    g.restore();
+  }
+
+  tmBakedW = W;
+  tmBakedH = H;
+  tmBakedDirty = false;
+  tmSelId = state.selectedId;
+  tmHoverId = null;
+  paintTreemap();
+
+  // 渲染诊断：视口 / 可见块数 / 当前目录在画布上的矩形
+  post({ cmd:"diag", what:"bake",
+    cur: state.current ? state.current.name : "",
+    curId: state.current ? state.current.id : 0,
+    allLeaves: tmAllLeaves.length,
+    allDirs: tmAllDirs.length,
+    live: tmLiveLeaves.length,
+    liveDirs: tmLiveDirs.length,
+    box: tmBox ? [Math.round(tmBox.x), Math.round(tmBox.y),
+                  Math.round(tmBox.w), Math.round(tmBox.h)] : null,
+    k: +tmView.k.toFixed(4),
+    logScale: treemapLogScale,
+    top: tmLiveLeaves.slice()
+      .sort((a,b)=>(b.w*b.h)-(a.w*a.h)).slice(0,5)
+      .map(r=>`${r.node.name}=${r.node.size}B/${Math.round(r.w*r.h)}px2`),
+    W, H });
+}
+
+// 入口：智能 —— 只有【根数据 / 画布尺寸 / 主题 / 排序】变了才重算整树布局；
+// 仅切换 current 目录时只重算视口（= 纯放大，子块相对位置不变）。
+let tmLayoutKey = "";        // 上次布局对应的「根 id + 画布尺寸 + 主题 + 排序」
+function _layoutKey(W, H) {
+  const th = document.documentElement.getAttribute("data-theme") || "";
+  const rid = state.root ? state.root.id : 0;
+  const cid = state.current ? state.current.id : 0;
+  // 【关键】影响布局的一切都要进 key，否则对应操作不会触发重布局：
+  // 面积算法（线性/对数）、排序、主题、尺寸、根 id。
+  // 之前漏了 treemapLogScale → 点「面积」按钮不重渲染（用户报过）。
+  // 另外缓存还要算上「已加载子项的数量」——懒加载补进来的孩子必须触发重布局。
+  return `${rid}|${cid}|${W}x${H}|${th}|${state.sortKey}|${state.sortAsc}` +
+         `|log=${treemapLogScale ? 1 : 0}|kids=${_kidsStamp}`;
+}
+// 已加载节点的“指纹”：孩子总数。懒加载/细化补进新子树时它会变。
+let _kidsStamp = 0;
+function _bumpKidsStamp() { _kidsStamp++; }
+function renderTreemap(force) {
+  if (!state.current) return;
+  const { W, H } = ensureCanvas();
+  const key = _layoutKey(W, H);
+  if (force || key !== tmLayoutKey || !tmAllLeaves.length) {
+    tmLayoutKey = key;
+    // 一次出图：全量布局 + 一次烘焙（不做渐进轮；布局稳定、出图最快）
+    const st = document.getElementById("st0");
+    if (st && _st0AfterRender) st.textContent = "正在渲染树图…";
+    setTimeout(() => {
+      const t0 = performance.now();
+      layoutAll(999);
+      const t1 = performance.now();
+      updateView();
+      const t2 = performance.now();
+      bakeView();
+      const t3 = performance.now();
+      const dt = Math.round(t3 - t0);
+      post({ cmd:"diag", what:"prog", cap:999, leaves: tmAllLeaves.length, ms: dt, round: 0,
+             layoutMs: Math.round(t1 - t0), viewMs: Math.round(t2 - t1), bakeMs: Math.round(t3 - t2) });
+      if (st && _st0AfterRender) st.textContent = _st0AfterRender;
+    }, 30);
+  } else {
+    updateView();
+    bakeView();
+  }
+}
+
+// 分轮布局：2 → 4 → 6 → … 直到不再变化（或达到上限）。
+// 每轮结束都 updateView+bakeView，所以画面会「先粗后细」自己长出来。
+let _progTimers = [];
+let _progActive = false;      // 渐进细化进行中（视口锁定 + 新层淡入）
+let _viewLockBox = null;      // 渐进期间锁定的视口（box 不变 → 布局不跳动）
+let _progFadeDepth = Infinity;
+let _st0AfterRender = null;      // 渲染完成后的状态栏文案（一次出图期间先显示"正在渲染…"）
+function startProgressiveLayout() {
+  for (const t of _progTimers) clearTimeout(t);
+  _progTimers = [];
+  _progActive = true;
+  _viewLockBox = null;        // 第一轮先正常算视口，然后锁定
+  const caps = [2, 4, 6, 9, 13, 20, 999];
+  let i = 0;
+  const step = () => {
+    const cap = caps[Math.min(i, caps.length - 1)];
+    const t0 = performance.now();
+    layoutAll(cap);
+    updateView();
+    _progFadeDepth = cap;     // 本轮新层（更深的）半透明淡入
+    bakeView();
+    const dt = performance.now() - t0;
+    post({ cmd:"diag", what:"prog", cap, leaves: tmAllLeaves.length,
+           ms: Math.round(dt), round: i });
+    i++;
+    // 已到最深、或本轮几乎没新增块（说明细化完了）→ 停
+    if (i >= caps.length || cap === 999) {
+      _progActive = false; _viewLockBox = null; _progFadeDepth = Infinity;
+      return;
+    }
+    _progTimers.push(setTimeout(step, 30));
+  };
+  step();
+}
+
+// 贴图 + 画选中框（轻活：选中变化/悬停变化时调用，不重画几万个块）
+function paintTreemap(suppressHover) {
+  if (!tmCtx) return;
+  if (glOk) { drawGL(); paintOverlay2D(suppressHover); return; }
+  if (!tmBaked || tmBakedDirty) return;
+  const W = tmBakedW, H = tmBakedH;
+  tmCtx.clearRect(0, 0, W, H);
+  tmCtx.drawImage(tmBaked, 0, 0, W, H);
+
+  // 高亮框：一律用 fillRect 画 4 条边，线宽 1/tmDpr = 物理 1px
+  const drawHl = (id, fill, stroke) => {
+    // 单块直接找；目录在树图里没有单块 → 用其所有后代块的并集框
+    let R = null;
+    const u = unionRectOf(id);   // O(1)：文件=它自己的块；目录=它自己的块（子块铺满它）
+    if (u) R = { x0: u.x0, y0: u.y0, w: u.x1 - u.x0, h: u.y1 - u.y0 };
+    if (!R || R.w < 1 || R.h < 1) return null;
+    const { x0, y0, w, h } = R;
+    const RR = { x0, y0, x1: x0 + w, y1: y0 + h };
+    if (fill) { tmCtx.fillStyle = fill; tmCtx.fillRect(x0, y0, w, h); }
+    const lpw = 1 / tmDpr;
+    tmCtx.fillStyle = stroke;
+    tmCtx.fillRect(x0, y0, w, lpw);
+    tmCtx.fillRect(x0, y0 + h - lpw, w, lpw);
+    tmCtx.fillRect(x0, y0, lpw, h);
+    tmCtx.fillRect(x0 + w - lpw, y0, lpw, h);
+    return RR;
+  };
+  // 统一焦点框：任意时刻只画一个。
+  // 优先级：滚轮框选(wheel) > 悬停(hover) > 选中(sel)。
+  // suppressHover=true（有滚轮框选）时一个都不画，由 paintWheelFocus 单独画大框。
+  if (!suppressHover) {
+    // 统一的「焦点框 + 悬浮信息」：框和信息面板永远绑在一起，
+    // 文件/文件夹通用（目录没有单块 → 用后代并集框）。
+    const id = (tmHoverId != null) ? tmHoverId : tmSelId;
+    if (id != null) {
+      const R = drawHl(id, null, tmHoverId != null ? "rgba(255,255,255,.85)"
+                                                   : "rgba(255,255,255,.95)");
+      if (R) drawInfoLabel(tmCtx, R, findNodeById(id), W, H);
+    }
+  }
+}
+
+// 只更新列表的高亮行（不重建 DOM）
+function syncListSelection() {
+  const rows = innerEl.querySelectorAll(".row");
+  for (const el of rows) {
+    const i = +el.dataset.row;
+    const r = state.rows[i];
+    const on = !!r && state.selectedIds.has(r.node.id);
+    el.classList.toggle("selected", on);
+  }
+}
+
+// 块的实际像素边界（绘制与命中必须共用，否则点哪儿和框哪儿差 1~2px）
+function tmRect(r) {
+  // r.x/r.y 是【虚拟坐标系】里的坐标，必须先过视口（tmView）映射到画布。
+  const x0 = Math.floor(vx(r.x)), y0 = Math.floor(vy(r.y));
+  const x1 = Math.ceil(vx(r.x + r.w)), y1 = Math.ceil(vy(r.y + r.h));
+  return { x0, y0, x1, y1, w: x1 - x0, h: y1 - y0 };
+}
+
+// ---- 挂在节点上的块矩形（O(1) 取用；tmRect 的节点版）----
+function nodeBlockValid(n) {
+  return !!n && n.bGen === tmBlockGen && (n.bw > 0 || n.bh > 0);
+}
+function tmRectOfNode(n) {
+  const x0 = Math.floor(vx(n.bx)), y0 = Math.floor(vy(n.by));
+  const x1 = Math.ceil(vx(n.bx + n.bw)), y1 = Math.ceil(vy(n.by + n.bh));
+  return { x0, y0, x1, y1, w: x1 - x0, h: y1 - y0 };
+}
+function nodeCanvasRect(n) {          // {x0,y0,w,h}（FLIP 动画等用）
+  if (!nodeBlockValid(n)) return null;
+  const R = tmRectOfNode(n);
+  return { x0: R.x0, y0: R.y0, w: R.x1 - R.x0, h: R.y1 - R.y0 };
+}
+
+// 命中测试：利用布局自身的树结构【递归下行】。
+// squarify 切出的子块严格铺满父块（无重叠、无缝隙）→ 一个点最多落在一个子块里，
+// 每层只需扫描「该节点的子项」（C:\ 根 44 个，一般几十个，上限 kidsCap），
+// 复杂度 O(深度 × 每层兄弟数)，而不是对 84.6 万叶子做线性扫描。
+//
+// 两个必须和旧实现（线性扫描）对齐的细节：
+//  1) 块矩形要过 floor/ceil 取整，相邻兄弟在边界像素上会「重叠 1px」。
+//     旧实现从数组末尾往前找 = 后画的在上面 → 这里也必须**从后往前**扫。
+//  2) 某个兄弟的取整矩形可能盖住了这个像素、但它的子树里其实没有块
+//     （它自己不是叶子块，因为被细分过）→ 必须**回溯**继续试前面的兄弟。
+function hitDeepest(children, X, Y) {
+  for (let i = children.length - 1; i >= 0; i--) {
+    const c = children[i];
+    if (!nodeBlockValid(c)) continue;
+    const R = tmRectOfNode(c);
+    if (!(X >= R.x0 && X < R.x1 && Y >= R.y0 && Y < R.y1)) continue;
+    const canSplit = !!(c.isDir && !c.bLeaf && c.children && c.children.length);
+    if (canSplit) {
+      const deep = hitDeepest(c.children, X, Y);
+      if (deep) return deep;          // 更深的块在 DFS 顺序里更靠后 → 优先级更高
+      continue;                        // 只是父块多盖了 1px：它不作为叶子参与命中
+    }
+    return c;                          // 文件 / 到深度上限 / 切不动的目录 = 叶子块
+  }
+  return null;
+}
+function tmHitTest(px, py) {
+  const X = Math.floor(px), Y = Math.floor(py);
+  const root = state.current || state.root;
+  if (!root || !root.children || !root.children.length) return null;
+  return hitDeepest(root.children, X, Y);
+}
+
+// 旧的线性扫描：留着给自检做逐点对照（新实现必须与它结果完全一致）
+function tmHitTestScan(px, py) {
+  const X = Math.floor(px), Y = Math.floor(py);
+  for (let i = tmLiveLeaves.length - 1; i >= 0; i--) {
+    const { x0, y0, x1, y1 } = tmRect(tmLiveLeaves[i]);
+    if (x1 - x0 < 1 || y1 - y0 < 1) continue;
+    // 半开区间，和绘制边界完全一致
+    if (X >= x0 && X < x1 && Y >= y0 && Y < y1) return tmLiveLeaves[i].node;
+  }
+  return null;
+}
+
+// 统一取「相对 canvas 的逻辑坐标」（canvas 占满 rightEl，无边框/内边距）
+function tmLocalPoint(e) {
+  const b = tmCanvas ? tmCanvas.getBoundingClientRect() : rightEl.getBoundingClientRect();
+  return { x: e.clientX - b.left, y: e.clientY - b.top };
+}
+
+// 选中态变更：只重绘高亮，不重烘焙
+function setTreemapSelection(id) {
+  if (tmSelId === id) return;
+  tmSelId = id;
+  paintTreemap();
+}
+
+// 列表联动：把 node 在左侧列表定位 —— 展开到它的整条祖先链，再滚动到该行
+function locateInList(node) {
+  if (!node || !state.current) return;
+  // 树图只渲染当前目录的子树，故 node 必在其内；展开 node 到 state.current 之间的目录
+  let p = node.parent, guard = 0;
+  while (p && p !== state.current && guard++ < 128) {
+    if (p.isDir) state.expanded.add(p.id);
+    p = p.parent;
+  }
+  buildRows();
+  innerEl.dataset.count = "";     // 行数可能变，强制下一行重设高度
+  renderList();
+  scrollToNode(node.id);
+}
+// 把指定 id 的行滚动到列表可视区（约上 1/3 处），并重绘该区域
+function scrollToNode(id) {
+  const i = state.rows.findIndex(r => r.node.id === id);
+  if (i < 0) return;
+  listEl.scrollTop = Math.max(0, i * ROW_H - Math.floor(listEl.clientHeight / 3));
+  renderList();
+}
+
+// 统一取节点完整路径（优先后端 path，缺失时用 parent 链拼）
+function nodeFullPath(n) {
+  if (!n) return "";
+  if (n.path) return n.path;
+  const parts = [];
+  for (let p = n; p; p = p.parent) parts.unshift(p.name || "");
+  return parts.join("\\");
+}
+
+// 自定义悬浮提示：原生 title 有 ~0.5-1s 延迟，这里即时显示
+let tmTipEl = null, tmTipId = null, tmTipText = "";
+function tmShowTip(n, cx, cy) {
+  const text = n ? `${nodeFullPath(n)}\n${fmtSize(n.size)}` : "";
+  if (!n) { tmHideTip(); return; }
+  if (!tmTipEl) { tmTipEl = document.createElement("div"); tmTipEl.className = "tm-tip"; document.body.appendChild(tmTipEl); }
+  if (tmTipId !== n.id) { tmTipId = n.id; tmTipText = text; tmTipEl.textContent = text; }
+  tmTipEl.style.display = "block";
+  // 跟随光标，靠近右/下边缘时翻到左侧/上方
+  const r = tmTipEl.getBoundingClientRect();
+  let x = cx + 14, y = cy + 16;
+  if (x + r.width > window.innerWidth - 4) x = cx - r.width - 12;
+  if (y + r.height > window.innerHeight - 4) y = cy - r.height - 12;
+  if (x < 4) x = 4;
+  if (y < 4) y = 4;
+  tmTipEl.style.left = x + "px";
+  tmTipEl.style.top = y + "px";
+}
+function tmHideTip() {
+  if (tmTipEl) tmTipEl.style.display = "none";
+  tmTipId = null; tmTipText = "";
+}
+// 鼠标悬停：手型 + tooltip + 高亮框（只重绘高亮，不重烘焙）
+rightEl.addEventListener("mousemove", e => {
+  const p = tmLocalPoint(e);
+  const n = tmHitTest(p.x, p.y);
+  const id = n ? n.id : null;
+  if (id !== tmHoverId) {
+    // 鼠标移到【别的块】上 → 上一次上滚的焦点框作废，焦点跟着鼠标走。
+    // （以前粘在旧目标上，用户报「移出去不会切换」）
+    if (wheelFocusRect && id !== wheelBaseHoverId) resetWheelFocus(id);
+    tmHoverId = id;
+    wheelFocusRect ? paintWheelFocus() : paintTreemap();
+  }
+  rightEl.style.cursor = n ? "pointer" : "default";
+  // 【只有一个"悬浮菜单"】有滚轮焦点框时，焦点框自带的信息标签就是唯一的菜单，
+  // 不再显示跟随鼠标的 tooltip —— 否则同屏会出现两个信息面板（用户报过）。
+  // 树图上的信息【一律】由焦点框自带的标签显示（框+信息是一体的）。
+  // 不再有第二个跟随光标的 tooltip —— 用户要求"焦点框和悬浮信息绑定"。
+  tmHideTip();
+});
+rightEl.addEventListener("mouseleave", () => {
+  tmHideTip();
+  if (tmHoverId !== null) { tmHoverId = null; wheelFocusRect ? paintWheelFocus() : paintTreemap(); }
+});
+
+// depthCap：本轮最多展开到第几层（null = 不限）。
+// 分轮调用可以「先出大块、再逐层细化」，避免等整棵树算完才显画面。
+function collectLeaves(items, x, y, w, h, leaves, depth, anc, depthCap) {
+  if (!items.length || w < 0.01 || h < 0.01) return;   // 浮点下界：任何可见子项都保留几何
+  anc = anc || [];
+  const cap = (depthCap == null) ? Infinity : depthCap;
+
+  const placed = [];
+  squarify(sizedItems(items), x, y, w, h, placed, 0, 1);
+
+  for (const p of placed) {
+    const n = p.node;
+    const sub = (n.isDir && n.children && n.children.length) ? n.children : null;
+    const pw = Math.round(p.w), ph = Math.round(p.h);
+    const chain = anc.concat([n.id]);        // 本块的祖先链（含自己）
+
+    // ⚡ 块矩形直接挂到节点上：命中测试/并集框靠它做「沿树下行」，
+    // 不再对 tmLiveLeaves 做 O(n) 线性扫描（C:\ 是 84.6 万块）。
+    // 子块严格铺满父块（见 squarify 的 remaining 递归），所以一个点最多落在一个子块里。
+    const canSplit = !!(sub && pw >= 0.02 && ph >= 0.02 && depth < cap);
+    n.bx = p.x; n.by = p.y; n.bw = p.w; n.bh = p.h;
+    n.bGen = tmBlockGen;      // 代次校验
+    n.bLeaf = !canSplit;      // true = 本轮它是叶子块（文件 / 到深度上限 / 切不动）
+
+    if (n.isDir && pw >= 12 && ph >= 12) {
+      tmAllDirs.push({ node: n, x: p.x, y: p.y, w: p.w, h: p.h, depth, chain: anc.slice() });
+    }
+
+    // 还能细分、且没到本轮深度上限 → 继续往下切（阈值降到浮点下界）
+    if (canSplit) {
+      collectLeaves(sub, p.x, p.y, p.w, p.h, leaves,
+                    depth + 1, chain, cap);
+    } else {
+      // 到上限 / 切不动 / 本来就是文件 → 作为叶子块
+      // （到上限的目录先用它自己的块占位，下一轮会被替换成更细的子块）
+      leaves.push({ node: n, x: p.x, y: p.y, w: p.w, h: p.h, depth, chain });
+    }
+  }
+}
+
+// canvas 的 fillText(text,x,y,maxWidth) 会把文字【横向压扁】，不是截断。
+// 这里自己按测量宽度裁字符，超出加省略号。
+function fitText(g, text, maxW) {
+  if (maxW <= 0 || !text) return "";
+  const full = g.measureText(text).width;
+  if (full > 0 && full <= maxW) return text;
+  if (full === 0) return text.slice(0, Math.max(1, Math.floor(maxW / 12)));  // 字体没就绪时的兜底
+  const ell = "…";
+  const ew = g.measureText(ell).width;
+  if (ew > maxW) return "";
+  // 二分找能放下的最长前缀
+  let lo = 0, hi = text.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (g.measureText(text.slice(0, mid)).width + ew <= maxW) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo > 0 ? text.slice(0, lo) + ell : ell;
+}
+
+// 把 #rrggbb 按比例调亮(正)/调暗(负)，返回 #rrggbb
+function lighten(hex, amt) {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return hex;
+  const v = parseInt(m[1], 16);
+  let r = (v >> 16) & 255, g2 = (v >> 8) & 255, b = v & 255;
+  const f = (c) => Math.max(0, Math.min(255, Math.round(c + 255 * amt)));
+  return "#" + ((f(r) << 16) | (f(g2) << 8) | f(b)).toString(16).padStart(6, "0");
+}
+
+// 文件扩展名 → 颜色映射（可定制：设置面板「文件颜色」卡片，存 ui-prefs.json）
+// 每类一组后缀 + 一个颜色；未匹配的用 extFallback。
+// 默认方案：docs/file-color-scheme.md（2026-10-06，参考 WizTree 实机分组 + 色相可区分性设计）
+let extMap = {
+  img:   { color: "#d98a4f", exts: ["jpg","jpeg","png","gif","bmp","webp","svg","ico","tif","tiff","heic","raw"] },
+  vid:   { color: "#4f9fd9", exts: ["mp4","mkv","avi","mov","wmv","flv","webm","m4v","mpg","mpeg","ts","rmvb"] },
+  aud:   { color: "#a66fd9", exts: ["mp3","wav","flac","aac","ogg","m4a","wma","ape"] },
+  doc:   { color: "#d9b84f", exts: ["doc","docx","pdf","txt","md","xls","xlsx","ppt","pptx","csv","odt","rtf"] },
+  zip:   { color: "#d95f5f", exts: ["zip","rar","7z","tar","gz","bz2","xz","z"] },
+  code:  { color: "#4fbfa6", exts: ["c","cpp","h","hpp","py","js","ts","java","cs","go","rs","json","xml","html","css","sh","bat","sql"] },
+  exe:   { color: "#5fbf6f", exts: ["exe","msi","apk","appx","msix"] },
+  lib:   { color: "#6f8fd9", exts: ["dll","sys","drv","ocx","dat"] },
+  vdisk: { color: "#8fbf5f", exts: ["vdi","vhd","vhdx","vmdk","qcow","iso","nrg","bin"] },
+  log:   { color: "#5ab8c9", exts: ["log","ini","cfg","conf","cache","tmp"] },
+};
+let extFallback = "#5a6472";   // 未匹配后缀的颜色
+prefs.extMap = extMap;
+prefs.extFallback = extFallback;
+const EXT_GROUP_NAMES = { img: "图片", vid: "视频", aud: "音频", doc: "文档", zip: "压缩",
+                          code: "代码", exe: "可执行", lib: "库/系统", vdisk: "虚拟磁盘", log: "日志/配置" };
+function extColor(name) {
+  const ext = (name.match(/\.([^.]+)$/) || [,""])[1].toLowerCase();
+  for (const g of Object.values(extMap)) if (g.exts.includes(ext)) return g.color;
+  return extFallback;
+}
+
+rightEl.addEventListener("click", e => {
+  const p = tmLocalPoint(e);
+  const hit = tmHitTest(p.x, p.y);
+  // 有滚轮框选时，作用在【框选目标（目录）】上，而不是光标下的小文件
+  const n = (wheelFocusId != null) ? findNodeById(wheelFocusId) : hit;
+  if (!n) return;
+  if (withinWheelWindow()) return;   // 刚用滚轮框选，别顺带选中
+  state.selectedId = n.id;
+  setTreemapSelection(n.id);      // 只重画高亮，不重画几万个块
+  locateInList(n);                // 列表联动：展开到该节点并滚动定位
+});
+rightEl.addEventListener("dblclick", e => {
+  const p = tmLocalPoint(e);
+  const hit = tmHitTest(p.x, p.y);
+  const n = (wheelFocusId != null) ? findNodeById(wheelFocusId) : hit;
+  if (!n) return;
+  if (withinWheelWindow()) return;   // 滚轮后 500ms 内的双击只当单击
+  if (n.isDir) {
+    // FLIP：记下被点块在画布坐标系里的矩形，进入后新画面从它放大到铺满
+    const q = nodeCanvasRect(n);
+    if (q) pendingFlip = { x: q.x0, y: q.y0, w: q.w, h: q.h };
+    enter(n);
+  } else {
+    post({ cmd:"open", path:nodeFullPath(n) });
+  }
+});
+
+// ===== 设置面板（复用旧版 settings.cpp 的 config.json 双向绑定）=====
+// 字段定义：key = 宿主 JSON 里的键名；分组显示。
+const SET_FIELDS = [
+  { g:"扫描", k:"threads",       t:"num",  label:"扫描线程数",           inf:false, hint:"1-16" },
+  { g:"扫描", k:"skipHidden",    t:"bool", label:"跳过隐藏/系统项" },
+  { g:"扫描", k:"followReparse", t:"bool", label:"跟随重解析点（自动防环）" },
+  { g:"树图", k:"maxDepth",      t:"num",  label:"递归层级",             inf:true,  hint:"0 = 无限" },
+  { g:"树图", k:"minSizeMB",     t:"num",  label:"递归最小尺寸 (MB)",    inf:false, hint:"0 = 全部" },
+  { g:"树图", k:"maxRects",      t:"num",  label:"最大矩形数",           inf:true,  hint:"0 = 无限" },
+  { g:"树图", k:"kidsCap",       t:"num",  label:"每层展开上限",         inf:true,  hint:"0 = 无限" },
+  { g:"树图", k:"lazyDepth",     t:"num",  label:"懒加载层级",           inf:true,  hint:"0 = 全量传输；该层级之下的子目录按需加载" },
+  { g:"树图", k:"showLabels",    t:"bool", label:"大矩形显示名称" },
+  { g:"树图", k:"colorScheme",   t:"num",  label:"配色方案",             hint:"0=扩展名 1=类型 2=单色" },
+  { g:"界面", k:"defaultSort",   t:"num",  label:"默认排序",             hint:"0=大小 1=名称" },
+  { g:"界面", k:"rowExtraPx",    t:"num",  label:"行附加高度 (px)",      inf:false },
+  { g:"界面", k:"confirmDelete", t:"bool", label:"删除前系统确认" },
+];
+const MENU_FIELDS = [
+  ["open","打开"],["explore","在资源管理器中打开"],["terminal","打开终端"],
+  ["props","属性"],["copyPath","复制完整路径"],["copyName","复制文件名"],
+  ["copySize","复制大小"],["enter","进入此目录"],["locateList","在列表中定位"],
+  ["locateTreemap","在树图中定位"],["selectParent","选择父级"],["goUp","向上"],
+  ["back","后退"],["forward","前进"],["rescan","重新扫描此项"],
+  ["deleteRecycle","删除到回收站"],["deleteForever","永久删除"],
+  ["shellMenu","包含资源管理器扩展菜单"],
+];
+
+let setData = null;      // 宿主返回的设置对象
+
+// 文件颜色卡片：HTML 生成 + 事件挂载（改/增/删全部即时生效；删/增只重建本卡片）
+function extCardHtml() {
+  let h = `<h4>文件颜色（后缀 → 颜色，可增删改查）</h4>`;
+  for (const k of Object.keys(extMap)) {
+    h += `<div class="frow"><label title="${EXT_GROUP_NAMES[k] || k}">${EXT_GROUP_NAMES[k] || k}</label>` +
+         `<input type="color" data-exc="${k}" value="${extMap[k].color}" style="width:44px">` +
+         `<input type="text" data-exx="${k}" value="${extMap[k].exts.join(",")}" ` +
+         `style="flex:1;min-width:120px" title="逗号分隔的后缀名，改动即时生效">` +
+         `<button type="button" class="mini" data-extdel="${k}" title="删除此分类">✕</button></div>`;
+  }
+  h += `<div class="frow"><label title="未匹配任何分类的后缀">其他</label>` +
+       `<input type="color" data-exc="__fallback" value="${extFallback}" style="width:44px"></div>`;
+  h += `<div class="frow"><label title="新增一个后缀分类">新分类</label>` +
+       `<input type="text" id="extNewName" placeholder="分类名，如 字体" style="flex:1">` +
+       `<button type="button" class="mini" id="extAdd">添加</button></div>`;
+  return h;
+}
+function attachExtCardEvents(card) {
+  card.querySelectorAll("[data-exc]").forEach(el => {
+    el.onchange = () => {
+      const k = el.dataset.exc;
+      if (k === "__fallback") extFallback = el.value;
+      else if (extMap[k]) extMap[k].color = el.value;
+      prefs.extMap = extMap; prefs.extFallback = extFallback; savePrefs();
+      renderTreemap();
+    };
+  });
+  card.querySelectorAll("[data-exx]").forEach(el => {
+    el.onchange = () => {
+      const k = el.dataset.exx;
+      if (extMap[k]) extMap[k].exts = el.value.split(",").map(x => x.trim().toLowerCase()).filter(Boolean);
+      prefs.extMap = extMap; savePrefs();
+      renderTreemap();
+    };
+  });
+  card.querySelectorAll("[data-extdel]").forEach(el => {
+    el.onclick = () => {
+      delete extMap[el.dataset.extdel];
+      prefs.extMap = extMap; savePrefs();
+      card.innerHTML = extCardHtml(); attachExtCardEvents(card);
+      renderTreemap();
+    };
+  });
+  const add = card.querySelector("#extAdd");
+  if (add) add.onclick = () => {
+    const nm = (card.querySelector("#extNewName").value || "").trim();
+    if (!nm) return;
+    if (!extMap[nm]) extMap[nm] = { color: "#5a6472", exts: [] };
+    prefs.extMap = extMap; savePrefs();
+    card.innerHTML = extCardHtml(); attachExtCardEvents(card);
+  };
+}
+function buildSettingsForm() {
+  const d = setData || {};
+  const get = (k) => {
+    for (const grp of ["scan","treemap","ui"]) if (d[grp] && k in d[grp]) return d[grp][k];
+    return undefined;
+  };
+  const numRow = (f, v) => {
+    if (f.t === "bool") {
+      return `<div class="frow"><label title="${f.label}">${f.label}</label>` +
+             `<input type="checkbox" data-sk="${f.k}" ${v ? "checked" : ""}></div>`;
+    }
+    if (f.inf) {
+      return `<div class="frow"><label title="${f.label} ${f.hint || ""}">${f.label}</label>` +
+             `<span class="infwrap"><input type="number" min="0" data-sk="${f.k}" value="${v == null ? 0 : v}">` +
+             `<em class="infhint">0=∞</em></span></div>`;
+    }
+    return `<div class="frow"><label title="${f.label} ${f.hint || ""}">${f.label}</label>` +
+           `<input type="number" data-sk="${f.k}" value="${v == null ? 0 : v}" title="${f.hint || ""}"></div>`;
+  };
+
+  // 按组收集
+  const groups = {};
+  for (const f of SET_FIELDS) (groups[f.g] = groups[f.g] || []).push(f);
+
+  let html = `<div class="cfg-cards">`;
+  for (const g of ["扫描","树图","界面"]) {
+    if (!groups[g]) continue;
+    html += `<div class="card"><h4>${g}</h4>`;
+    for (const f of groups[g]) html += numRow(f, get(f.k));
+    html += `</div>`;
+  }
+  // 文件颜色卡片：后缀 → 颜色映射可增删改查（前端 prefs，改动即时生效）
+  html += `<div class="card" id="extCard">` + extCardHtml() + `</div>`;
+  // 右键菜单：整行宽卡片，多列密集排
+  html += `<div class="card wide"><h4>右键菜单（显示哪些项）</h4><div class="menu-grid">`;
+  for (const [k, label] of MENU_FIELDS) {
+    const v = d.menu ? d.menu[k] : true;
+    html += `<div class="frow"><label title="${label}">${label}</label>` +
+            `<input type="checkbox" data-mk="${k}" ${v ? "checked" : ""}></div>`;
+  }
+  html += `</div></div>`;
+  html += `</div>`;
+  document.getElementById("setBody").innerHTML = html;
+  const _ec = document.getElementById("extCard");
+  if (_ec) attachExtCardEvents(_ec);
+}
+
+function openSettings() {
+  post({ cmd:"diag", what:"openSettings" });
+  const ok = post({ cmd:"getSettings" });
+  post({ cmd:"diag", what:"getSettingsSent", ok });
+  document.getElementById("setMask").classList.add("show");
+}
+function closeSettings() {
+  document.getElementById("setMask").classList.remove("show");
+}
+function saveSettings() {
+  const out = { cmd:"setSettings" };
+  document.querySelectorAll("#setBody [data-sk]").forEach(el => {
+    out[el.dataset.sk] = el.type === "checkbox" ? el.checked : (+el.value || 0);
+  });
+  document.querySelectorAll("#setBody [data-mk]").forEach(el => {
+    out[el.dataset.mk] = el.checked;
+  });
+  post(out);
+  renderTreemap(true);       // 设置里含树图/配色等参数，保存后立即重渲染
+  const h = document.getElementById("setHint");
+  h.textContent = "已保存（扫描类设置下次扫描生效）";
+  setTimeout(() => { h.textContent = ""; closeSettings(); }, 700);
+}
+
+document.getElementById("settingsBtn").addEventListener("click", openSettings);
+document.getElementById("setClose").addEventListener("click", closeSettings);
+document.getElementById("setSave").addEventListener("click", saveSettings);
+document.getElementById("setMask").addEventListener("click", e => {
+  if (e.target.id === "setMask") closeSettings();     // 点遮罩关闭
+});
+
+// ===== 键盘：对齐 Windows 资源管理器 =====
+// ↑↓ 移动选中 / ←→ 折叠展开 / Enter 打开 / Backspace 上级
+// Ctrl+A 全选 / Ctrl+C X V 复制剪切粘贴 / F2 重命名 / Delete 删除 / Shift+Delete 永久删除
+// 文件操作走系统壳命令（宿主 cmd:"shell"），因为是 WebView2，JS 不能直接动文件系统。
+function focusRow() {
+  let i = state.rows.findIndex(r => r.node.id === state.selectedId);
+  return i < 0 ? -1 : i;
+}
+function ensureVisible(i) {
+  const top = i * ROW_H, bot = top + ROW_H;
+  if (top < listEl.scrollTop) listEl.scrollTop = top;
+  else if (bot > listEl.scrollTop + listEl.clientHeight)
+    listEl.scrollTop = bot - listEl.clientHeight;
+}
+function moveSel(delta) {
+  const n = state.rows.length;
+  if (!n) return;
+  let i = focusRow();
+  if (i < 0) i = delta > 0 ? -1 : n;
+  i = Math.max(0, Math.min(n - 1, i + delta));
+  selectRow(i, {});
+  ensureVisible(i);
+}
+function toggleExpand(i, wantOpen) {
+  const r = state.rows[i];
+  if (!r || !r.hasKids) return;
+  const id = r.node.id;
+  const isOpen = state.expanded.has(id);
+  const open = (wantOpen == null) ? !isOpen : wantOpen;
+  if (open) state.expanded.add(id); else state.expanded.delete(id);
+  render();
+}
+function sendShell(verb, node) {
+  if (!node) return;
+  post({ cmd: "shell", verb, path: nodeFullPath(node), isDir: !!node.isDir, name: node.name });
+}
+function selNodes() {
+  return state.rows.filter(r => state.selectedIds.has(r.node.id)).map(r => r.node);
+}
+
+document.addEventListener("keydown", e => {
+  // 输入框里打字不拦截
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+  const i = focusRow();
+  const node = i >= 0 ? state.rows[i].node : null;
+  const ctrl = e.ctrlKey, shift = e.shiftKey;
+
+  switch (e.key) {
+    case "ArrowDown": e.preventDefault(); moveSel(1); return;
+    case "ArrowUp":   e.preventDefault(); moveSel(-1); return;
+    case "ArrowRight":
+      e.preventDefault();
+      if (i < 0) return;
+      toggleExpand(i, true);          // 展开（或进入）
+      return;
+    case "ArrowLeft":
+      e.preventDefault();
+      if (i < 0) return;
+      if (state.rows[i].hasKids && state.expanded.has(state.rows[i].node.id)) toggleExpand(i, false);
+      else if (state.rows[i].depth > 0) {   // 已收起 → 跳到父行
+        const d = state.rows[i].depth;
+        for (let k = i - 1; k >= 0; k--) if (state.rows[k].depth < d) {
+          selectRow(k, {}); ensureVisible(k); break;
+        }
+      }
+      return;
+    case "Enter":
+      e.preventDefault();
+      if (!node) return;
+      if (node.isDir) enter(node); else post({ cmd:"open", path:nodeFullPath(node) });
+      return;
+    case "Backspace":
+      e.preventDefault();
+      if (state.current && state.current.parent) enter(state.current.parent);
+      return;
+    case "F2":
+      e.preventDefault();
+      if (node) sendShell("rename", node);
+      return;
+    case "Delete":
+      e.preventDefault();
+      sendShell(shift ? "delete_perm" : "delete", node);
+      return;
+    case "a": case "A":
+      if (ctrl) {
+        e.preventDefault();
+        state.selectedIds.clear();
+        state.rows.forEach(r => state.selectedIds.add(r.node.id));
+        state.anchorIdx = 0;
+        syncListSelection();
+      }
+      return;
+    case "c": case "C":
+      if (ctrl && node) { e.preventDefault(); sendShell("copy", node); }
+      return;
+    case "x": case "X":
+      if (ctrl && node) { e.preventDefault(); sendShell("cut", node); }
+      return;
+    case "v": case "V":
+      if (ctrl) { e.preventDefault(); sendShell("paste", null); }
+      return;
+    case "n": case "N":
+      if (ctrl && shift) { e.preventDefault(); sendShell("newfolder", null); }
+      return;
+  }
+});
+
+// 右键：定位当前选中项 / 打开所在目录 / 复制路径
+document.addEventListener("contextmenu", e => {
+  const rowEl = e.target.closest("[data-row]");
+  const inTreemap = rightEl.contains(e.target);
+  if (!rowEl && !inTreemap) return;
+  e.preventDefault();
+  let node = null;
+  if (rowEl) {
+    const r = state.rows[+rowEl.dataset.row];
+    node = r && r.node;
+  } else {
+    const p = tmLocalPoint(e);
+    node = tmHitTest(p.x, p.y);
+  }
+  if (!node) return;
+
+  // 树图里【滚轮框选】过某个目录时，右键应该作用于【框选的那个目录】，
+  // 而不是之前选中的文件。框选优先。
+  if (inTreemap && wheelFocusId != null) {
+    const fn = findNodeById(wheelFocusId);
+    if (fn) {
+      post({ cmd:"menu", path: nodeFullPath(fn), paths: [nodeFullPath(fn)],
+             isDir: fn.isDir, name: fn.name });
+      return;
+    }
+  }
+
+  // 右键【不改变选择】。菜单作用于「当前选择集」：
+  //   · 已有选中项 → 保持不动，菜单作用于全部选中项
+  //   · 没有选中项 → 只作用于右键的项
+  // （用户明确：真实资源管理器没有"右键改选"这个行为。）
+  let paths;
+  if (state.selectedIds.size > 0) {
+    paths = state.rows
+      .filter(r => state.selectedIds.has(r.node.id))
+      .map(r => nodeFullPath(r.node))
+      .filter(Boolean);
+  } else {
+    paths = [nodeFullPath(node)];
+  }
+  if (!paths.length) paths = [nodeFullPath(node)];
+
+  post({ cmd:"menu", path: nodeFullPath(node), paths, isDir: node.isDir, name: node.name });
+});
+
+// ===== 拖拽：列宽 + 左右分栏 =====
+let suppressHeadClick = false;
+function applySplit() {
+  const main = document.querySelector(".main");
+  const frac = Math.min(0.85, Math.max(SPLIT_MIN, splitFrac));
+  document.documentElement.style.setProperty("--split", (frac * 100).toFixed(2) + "%");
+  renderTreemap();          // 树图尺寸变了，重烘焙
+}
+function applyColWidths() {
+  render();                 // 表头 + 行都按新的 colX/colW 重排
+}
+
+// 列宽手柄
+document.getElementById("head").addEventListener("mousedown", e => {
+  const grip = e.target.closest(".grip");
+  if (!grip) return;
+  e.preventDefault();
+  const key = grip.dataset.col;
+  const startX = e.clientX;
+  const def = COL_DEFS.find(d => d.k === key);
+  const startW = key === "nm" ? nameW : (def ? def.w : 0);
+  document.body.classList.add("dragging");
+  const move = ev => {
+    const dx = ev.clientX - startX;
+    let w = startW + dx;
+    if (key === "nm") { nameW = Math.max(NAME_MIN, w); }
+    else if (def) { def.w = Math.max(def.min, w); }
+    layoutCols();
+    // 只更新表头与行的位置（轻量：直接改已有 DOM 的 style，不重建）
+    refreshGeometry();
+  };
+  const up = () => {
+    document.removeEventListener("mousemove", move);
+    document.removeEventListener("mouseup", up);
+    document.body.classList.remove("dragging");
+    suppressHeadClick = true;        // 抑制紧随其后的 click（否则会触发排序）
+    saveColPrefs();
+    render();               // 结束后整体重排一次，保证一致
+  };
+  document.addEventListener("mousemove", move);
+  document.addEventListener("mouseup", up);
+});
+
+// 左右分栏条
+document.getElementById("splitter").addEventListener("mousedown", e => {
+  e.preventDefault();
+  const sp = document.getElementById("splitter");
+  sp.classList.add("dragging");
+  document.body.classList.add("dragging");
+  const main = document.querySelector(".main");
+  const move = ev => {
+    const r = main.getBoundingClientRect();
+    splitFrac = Math.min(0.85, Math.max(SPLIT_MIN, (ev.clientX - r.left) / r.width));
+    applySplit();
+  };
+  const up = () => {
+    document.removeEventListener("mousemove", move);
+    document.removeEventListener("mouseup", up);
+    sp.classList.remove("dragging");
+    document.body.classList.remove("dragging");
+    saveColPrefs();
+    render();
+  };
+  document.addEventListener("mousemove", move);
+  document.addEventListener("mouseup", up);
+});
+
+// 拖动过程中只挪已渲染元素的坐标，不重建 DOM（否则几万块会卡）
+function refreshGeometry() {
+  layoutCols();
+  const head = document.getElementById("head");
+  const pos = [
+    [NAME_X, colW.nm], [colX.size, colW.size], [colX.pct, colW.pct],
+    [colX.type, colW.type], [colX.files, colW.files],
+  ];
+  head.querySelectorAll(".hcell").forEach((el, i) => {
+    if (!pos[i]) return;
+    el.style.left = pos[i][0] + "px";
+    el.style.width = pos[i][1] + "px";
+  });
+  innerEl.querySelectorAll(".row").forEach(row => {
+    const kids = row.children;
+    // 顺序：twist, nm, size, pct, type, files
+    if (kids[1]) { kids[1].style.left = (NAME_X + curDepthOf(row)) + "px"; kids[1].style.width = (colW.nm - curDepthOf(row)) + "px"; }
+    if (kids[2]) { kids[2].style.left = colX.size + "px"; kids[2].style.width = colW.size + "px"; }
+    if (kids[3]) { kids[3].style.left = colX.pct + "px";  kids[3].style.width = colW.pct + "px"; }
+    if (kids[4]) { kids[4].style.left = colX.type + "px"; kids[4].style.width = colW.type + "px"; }
+    if (kids[5]) { kids[5].style.left = colX.files + "px"; kids[5].style.width = colW.files + "px"; }
+  });
+}
+function curDepthOf(row) {
+  const i = +row.dataset.row;
+  const r = state.rows[i];
+  return r ? r.depth * INDENT : 0;
+}
+
+// ===== 滚轮逐级父级框选（移植旧版 treemap.cpp 的行为）=====
+// 上滚一格：把「框选目标」提升到当前 hover/选中节点的父级，
+//           父级通常没有对应单块 → 画它所有后代矩形的【并集框】。
+// 下滚一格：逐级回退（出栈）。
+const wheelStack = [];      // 每一层记录 {id, rect}
+let wheelFocusId = null;    // 当前框选的目标节点 id（null = 无框选）
+let wheelFocusRect = null;  // 该节点的并集框
+let wheelBaseHoverId = null; // 本次框选会话起始时所悬浮的块 id（换块就重置会话）
+let lastWheelTick = 0;      // 滚轮后 500ms 内的点击视为「只框选、不进入」
+
+// 结束当前上滚框选会话（焦点框随之落到鼠标所在块）
+function resetWheelFocus(currentId) {
+  wheelStack.length = 0;
+  wheelFocusId = null;
+  wheelFocusRect = null;
+  wheelBaseHoverId = (currentId == null ? null : currentId);
+}
+
+// 求某节点块的画布矩形（O(1)：矩形就挂在节点上）
+// —— 目录的「并集框」就是它自己的块矩形：它的子块严格铺满它（squarify），
+//    所以不需要再去扫所有后代叶子（旧实现是 O(n)+O(n·深度)）。
+function unionRectOf(id) {
+  const n = (id && id.id != null) ? id : findNodeById(id);
+  if (!n) return null;
+  // 根/当前目录本身在布局里没有块（collectLeaves 从它的 children 开始铺），
+  // 但它的后代铺满整块画布 —— 旧实现（扫后代叶子）返回的就是整块画布，
+  // 上滚框选到顶时会用到，这里保持同样的语义。
+  if (n === state.current || n === state.root) {
+    const { W, H } = ensureCanvas();
+    return { x0: 0, y0: 0, x1: Math.ceil(W), y1: Math.ceil(H) };
+  }
+  if (!nodeBlockValid(n)) return null;
+  const R = tmRectOfNode(n);
+  if (R.x1 - R.x0 < 1 || R.y1 - R.y0 < 1) return null;
+  return { x0: R.x0, y0: R.y0, x1: R.x1, y1: R.y1 };
+}
+function isDescendantOf(node, ancestorId) {
+  for (let p = node.parent; p; p = p.parent) if (p.id === ancestorId) return true;
+  return false;
+}
+
+// 从节点出发，找到它在当前布局里「最近的、有块的祖先」
+function nearestAncestorWithBlock(node) {
+  for (let p = node.parent; p; p = p.parent) {
+    if (unionRectOf(p.id)) return p;
+  }
+  return null;
+}
+
+// 焦点框的悬浮信息面板（文件、文件夹通用）。
+// 框和它是【一体】的：永远贴在框的外侧，跟着框走。
+function drawInfoLabel(g, R, node, W, H) {
+  if (!node || !R) return;
+  const total = (state.current && state.current.size) || 1;
+  const pct = (node.size / total * 100).toFixed(1);
+  // 完整路径（没有 path 字段时用父链拼）
+  let fullPath = nodeFullPath(node);
+  const lines = [
+    fullPath,                                 // 第一行：完整路径
+    `${node.name || ""}`,                     // 第二行：名称
+    `${fmtSize(node.size)} \u00b7 ${pct}%`,  // 第三行：大小 \u00b7 占比
+    node.isDir ? ("目录" + (node.dirCount != null ? " · " + node.dirCount + " 项" : "")) : "文件",
+  ];
+  g.font = "13px \'Microsoft YaHei\', \'Microsoft YaHei UI\', sans-serif";
+  const padX = 8, padY = 5, lh = 18;
+  const maxTW = Math.min(W - 16, Math.max(160, W * 0.7));
+  for (let i = 0; i < lines.length; i++) lines[i] = fitText(g, lines[i], maxTW - padX * 2);
+  let tw = 0;
+  for (const t of lines) tw = Math.max(tw, g.measureText(t).width);
+  const bw = tw + padX * 2, bh = lines.length * lh + padY * 2;
+
+  // 贴框外侧：右上 → 左上 → 右下 → 左下 → 框内左上（都要留在画布内）
+  let bx = R.x1 + 6, by = R.y0 - bh - 6;
+  if (bx + bw > W - 2) bx = R.x0 - bw - 6;
+  if (bx < 2) bx = Math.min(R.x0 + 2, Math.max(2, W - bw - 2));
+  if (by < 2) by = Math.min(R.y1 + 6, Math.max(2, H - bh - 2));
+  if (by + bh > H - 2) by = Math.max(2, H - bh - 2);
+
+  g.save();
+  g.fillStyle = "rgba(20,23,28,.88)";
+  g.fillRect(bx, by, bw, bh);
+  g.strokeStyle = "rgba(255,255,255,.35)";
+  g.lineWidth = 1 / tmDpr;
+  g.strokeRect(bx, by, bw, bh);
+  g.textBaseline = "top";
+  lines.forEach((t, i) => {
+    g.fillStyle = i === 0 ? "rgba(255,255,255,.62)"     // 路径
+                : i === 1 ? "#fff"                      // 名称
+                : i === 2 ? "rgba(255,255,255,.78)"     // 大小·占比
+                          : "rgba(255,255,255,.55)";    // 文件/目录
+    g.fillText(t, bx + padX, by + padY + i * lh);
+  });
+  g.restore();
+}
+
+function paintWheelFocus() {
+  // 有滚轮框选时不再画鼠标悬停框 —— 同一时刻只有一个框（框选优先）
+  paintTreemap(wheelFocusRect != null);
+  if (!wheelFocusRect) return;
+  const R = wheelFocusRect;
+  tmCtx.save();
+  // 框外压暗：整幅盖一层半透明黑，再把框内擦亮（简单做法：只画框线和四边暗调）
+  tmCtx.fillStyle = "rgba(0,0,0,.35)";
+  const W = tmBakedW, H = tmBakedH;
+  tmCtx.fillRect(0, 0, W, R.y0);
+  tmCtx.fillRect(0, R.y1, W, H - R.y1);
+  tmCtx.fillRect(0, R.y0, R.x0, R.y1 - R.y0);
+  tmCtx.fillRect(R.x1, R.y0, W - R.x1, R.y1 - R.y0);
+  // 框线：用 fillRect 画 4 条边，宽度按 dpr 换算 → 物理正好 1px（不再粗）
+  const lw = 1 / tmDpr;
+  tmCtx.fillStyle = "#ffffff";
+  tmCtx.fillRect(R.x0, R.y0, R.x1 - R.x0, lw);            // 上
+  tmCtx.fillRect(R.x0, R.y1 - lw, R.x1 - R.x0, lw);       // 下
+  tmCtx.fillRect(R.x0, R.y0, lw, R.y1 - R.y0);            // 左
+  tmCtx.fillRect(R.x1 - lw, R.y0, lw, R.y1 - R.y0);       // 右
+
+  const focusNode = (wheelFocusId != null) ? findNodeById(wheelFocusId) : null;
+  drawInfoLabel(tmCtx, R, focusNode, W, H);
+  tmCtx.restore();
+}
+
+rightEl.addEventListener("wheel", e => {
+  // 直接在树图上滚（旧版 WM_MOUSEWHEEL 就没有 Ctrl 判断）。
+  // 语义（按用户要求）：框选状态【绑定到鼠标当前所在的块】。
+  //   - 鼠标换到别的块上 → 视为一次全新的框选，从该块的父级开始上滚
+  //   - 鼠标不动继续上滚 → 逐级往上（父级 → 祖父级 …）
+  //   - 下滚 → 沿本次会话的层级历史逐级回退；退完就清空
+  e.preventDefault();
+  lastWheelTick = Date.now();
+  const dir = e.deltaY < 0 ? "up" : "down";     // 上滚 = deltaY < 0
+
+  const hoverNode = tmHoverId != null ? findNodeById(tmHoverId) : null;
+
+  if (dir === "up") {
+    // 鼠标换块了（或之前没框选）→ 重置历史，从当前块的父级开始
+    if (hoverNode && wheelBaseHoverId !== tmHoverId) {
+      wheelStack.length = 0;
+      wheelFocusId = null;
+      wheelFocusRect = null;
+      wheelBaseHoverId = tmHoverId;
+    }
+    if (!hoverNode && wheelBaseHoverId !== null) {
+      // 鼠标移到空白处：也重置，允许从「上次基块」重新开始
+      wheelStack.length = 0;
+      wheelFocusId = null;
+      wheelFocusRect = null;
+      wheelBaseHoverId = null;
+    }
+
+    // 起点：已有框选就从框选目标往上；否则从鼠标所在块开始
+    let startNode = (wheelFocusId != null) ? findNodeById(wheelFocusId) : null;
+    if (!startNode) startNode = hoverNode || (state.selectedId != null ? findNodeById(state.selectedId) : null);
+    if (!startNode) return;
+
+    // 第一次上滚：框选 startNode 的父级；之后每次再往上
+    const par = (wheelFocusId == null && startNode === hoverNode)
+                  ? startNode.parent          // 首次：当前块的父级
+                  : startNode.parent;         // 之后：继续往上
+    if (!par) return;                          // 已在根目录
+    const rect = unionRectOf(par.id);
+    if (!rect) return;
+    wheelStack.push({ id: wheelFocusId, rect: wheelFocusRect });
+    wheelFocusId = par.id;
+    wheelFocusRect = rect;
+
+  } else {
+    // 下滚：本次会话内逐级回退（只退到起点为止，不会跳回别的块的旧状态）
+    if (wheelStack.length) {
+      const back = wheelStack.pop();
+      wheelFocusId = back.id;
+      wheelFocusRect = back.rect;
+      // 退回到最初（没有框选）时，一并清掉基块标记
+      if (wheelFocusId == null) wheelBaseHoverId = tmHoverId;
+    } else {
+      wheelFocusId = null;
+      wheelFocusRect = null;
+      wheelBaseHoverId = tmHoverId;
+    }
+  }
+  // 焦点框一出现/变化，立刻收起鼠标 tooltip —— 同一时刻只留一个信息面板
+  if (wheelFocusRect) tmHideTip();
+  paintWheelFocus();
+}, { passive: false });
+
+// 滚轮后 500ms 内的树图点击：只框选、不进入（避免误触）
+function withinWheelWindow() { return Date.now() - lastWheelTick < 500; }
+
+// ===== 与 C++ 通信 =====
+function post(obj) {
+  try {
+    if (window.chrome && chrome.webview) {
+      chrome.webview.postMessage(obj);
+      return true;
+    }
+    document.getElementById("st1").textContent = "!! chrome.webview 不可用";
+    return false;
+  } catch (e) {
+    document.getElementById("st1").textContent = "!! post 失败: " + e.message;
+    return false;
+  }
+}
+
+// ===== 扫描模式切换（MFT 直读 / 普通遍历）=====
+(function () {
+  var css =
+    ".mft-btn{height:30px;padding:0 12px;border:1px solid var(--line);border-radius:6px;" +
+    "background:var(--btn);color:var(--dim);font:inherit;font-size:12px;cursor:pointer}" +
+    ".mft-btn:hover{background:var(--btn-hover);color:var(--text)}" +
+    ".mft-btn.on{background:var(--accent);color:#fff;border-color:var(--accent)}";
+  var st = document.createElement("style");
+  st.textContent = css;
+  document.head.appendChild(st);
+
+  var btn = document.createElement("button");
+  btn.id = "mftToggle";
+  btn.className = "mft-btn";
+  btn.title = "扫描模式切换：MFT 直读直接解析 NTFS 卷（需管理员，会自动提权）；普通遍历兼容所有路径";
+  btn.textContent = "普通遍历";
+  var settingsBtn = document.getElementById("settingsBtn");
+  if (settingsBtn && settingsBtn.parentNode) settingsBtn.parentNode.insertBefore(btn, settingsBtn);
+
+  // 双向绑定：m=0 普通 / 1 强制MFT / 2 自动；admin=当前是否管理员
+  // 管理员 && 非0 → 显示"MFT 直读"；否则显示"普通遍历"
+  window.__mftMode = function (m, admin) {
+    var on = (admin === true) && (m !== 0);
+    btn.textContent = on ? "MFT 直读" : "普通遍历";
+    btn.classList.toggle("on", on);
+    btn.setAttribute("data-m", String(m));
+    btn.setAttribute("data-admin", admin === true ? "1" : "0");
+  };
+  btn.addEventListener("click", function () {
+    var m = parseInt(btn.getAttribute("data-m") || "0", 10);
+    var target = (m !== 0) ? 0 : 1;   // 单击切换：直读 <-> 普通
+    var admin = btn.getAttribute("data-admin") === "1";
+    window.__mftMode(target, admin);  // optimistic: update text now
+    post({ cmd: "setMft", mode: target });
+  });
+})();
+
+// 导航历史（栈）：进入子目录压栈，返回弹栈
+const navHist = [];
+
+function enter(node, opts) {
+  opts = opts || {};
+  if (!node || !node.isDir) return;
+  if (!opts.noHistory && state.current && state.current !== node) {
+    navHist.push(state.current);
+    if (navHist.length > 200) navHist.shift();
+  }
+  state.current = node;
+  state.view = node.children || [];
+  state.expanded.clear();
+  // 根目录：默认展开（首次进入时），但允许用户点箭头折叠
+  if (state.rootNode) state.expanded.add(state.rootNode.id);
+  state.selectedId = null;
+  wheelStack.length = 0; wheelFocusId = null; wheelFocusRect = null;
+  renderCrumbs();
+
+  // 懒加载：子项缺失（被 JSON 截断 或 未扫到）时向宿主请求
+  if (!opts.skipFetch && (!node.children || node.children.length === 0) &&
+      node.hasKids !== false) {
+    post({ cmd: "list", path: nodeFullPath(node), id: node.id });
+    document.getElementById("st0").textContent = "正在加载 " + node.name + " …";
+  }
+  render();
+  playZoomAnim();
+}
+
+// 播放「放大到位」动画（先快后慢，easeOutExpo ≈ 1-e^(-x)）。
+// 支持 FLIP：传入旧矩形（进入前那块在画布里的位置），新画面会从那个位置
+// 缩放/平移到铺满，视觉上就是「点中的块放大到全屏」（像 WizTree）。
+// 重启动画：先设初始 transform → 强制 reflow → 再清掉，让 CSS 过渡播起来。
+let pendingFlip = null;    // 已废弃：视口模式下不需要 FLIP（见 playZoomAnim 注释）
+
+function playZoomAnim() {
+  const els = [innerEl, rightEl].filter(Boolean);
+  pendingFlip = null;
+
+  // 视口模式下【不要】对 canvas 做 FLIP transform：
+  // bakeView 已经把「当前目录铺满画布」画好了，再叠加 translate+scale 会让
+  // 内容错位/留白 → 用户看到「带豁口的长方形」（踩过）。
+  // 只做一次轻微的淡入即可，放大感来自视口本身的变化。
+  if (tmCanvas) {
+    tmCanvas.style.transition = "none";
+    tmCanvas.style.opacity = "0.55";
+    void tmCanvas.offsetWidth;
+    tmCanvas.style.transition = "opacity .18s cubic-bezier(0.16,1,0.3,1)";
+    tmCanvas.style.opacity = "1";
+    setTimeout(() => { if (tmCanvas) tmCanvas.style.transition = ""; }, 200);
+  }
+
+  // 列表/右栏：沿用 class 动画
+  for (const el of els) {
+    el.classList.remove("anim");
+    void el.offsetWidth;
+    el.classList.add("anim");
+    el.addEventListener("animationend", () => el.classList.remove("anim"), { once: true });
+  }
+}
+
+function goBack() {
+  const prev = navHist.pop();
+  if (prev) enter(prev, { noHistory: true });
+}
+function goUp() {
+  if (state.current && state.current.parent) enter(state.current.parent);
+}
+
+// 面包屑
+function renderCrumbs() {
+  const el = document.getElementById("crumbs");
+  if (!state.current) { el.innerHTML = ""; return; }
+  const chain = [];
+  for (let n = state.current; n; n = n.parent) chain.unshift(n);
+  el.innerHTML = chain.map((n, i) =>
+    `<b data-crumb="${i}">${esc(n.name)}</b>` +
+    (i < chain.length - 1 ? "<span>›</span>" : "")).join("");
+  state._crumbChain = chain;
+}
+document.getElementById("crumbs").addEventListener("click", e => {
+  const b = e.target.closest("[data-crumb]");
+  if (!b) return;
+  const n = state._crumbChain && state._crumbChain[+b.dataset.crumb];
+  if (n) enter(n);
+});
+
+// 懒加载回来的子项：挂到对应节点上并补 parent 链，然后重新渲染
+// ===== 渐进细化：后台小批量拉取子项，边拉边补画（用户看到图「慢慢长细」）=====
+// 扫描完先渲染粗图（顶层少量），然后 BFS 遍历视野里的目录，每次只请求一个
+// 目录的子项（cmd:"list"），拿到就把子树补进布局并重画。
+let _detailQueue = [];
+let _detailRunning = false;
+let _detailTimer = 0;
+
+function startProgressiveDetail() {
+  clearTimeout(_detailTimer);
+  _detailQueue = [];
+  _detailRunning = false;
+  if (!state.root) return;
+  _detailQueue.push(state.root);
+  _detailRunning = true;
+  stepDetail();
+}
+
+function stepDetail() {
+  if (!_detailQueue.length) {
+    _detailRunning = false;
+    post({ cmd:"diag", what:"detailDone" });
+    return;
+  }
+  const node = _detailQueue.shift();
+  // 需要细化：目录，且磁盘上的子项数 > 已加载的子项数（说明被截断过）
+  const need = node.isDir &&
+               (node.dirCount || 0) > (node.children ? node.children.length : 0);
+  if (need) post({ cmd: "list", path: nodeFullPath(node), id: node.id });
+  if (node.children) {
+    for (const c of node.children) {
+      if (c.isDir) _detailQueue.push(c);
+      if (_detailQueue.length > 4000) break;
+    }
+  }
+  _detailTimer = setTimeout(stepDetail, 40);   // 让出主线程，界面始终可交互
+}
+
+function applyChildren(id, children) {
+  const node = findNodeById(id);
+  if (!node) return;
+  (function link(list, par) {
+    for (const c of list) { c.parent = par; if (c.children) link(c.children, c); }
+  })(children, node);
+  node.children = children;
+  node.hasKids = children.length > 0;
+  _bumpKidsStamp();          // 指纹变化 → 下次 renderTreemap 会重布局
+  if (state.current && state.current.id === id) {
+    state.view = children;
+    document.getElementById("st0").textContent =
+      `${node.name} · ${children.length} 项`;
+    render();
+  } else {
+    // 后台补上了某个目录的子项：重算布局让树图变细（渐进细化的一部分）
+    renderTreemap();
+  }
+}
+
+// 在整棵树（含已加载层）里找节点
+// ⚡ 常规调用走 _treeById（O(1)）：这个函数在悬停/选中路径上被反复调用，
+//    旧实现每次都从根递归遍历整棵树（84.6 万节点时每次都是全树扫描）。
+function findNodeById(id, root) {
+  if (root === undefined && state._treeById && state._treeById.has(id))
+    return state._treeById.get(id);
+  root = root || state.root;
+  if (!root) return null;
+  if (root.id === id) return root;
+  if (root.children) {
+    for (const c of root.children) {
+      const hit = findNodeById(id, c);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+// 几何量测（DISKMATE_GEOM=1 时）：把每行的箭头/名字实际像素位置写进日志
+window.__dumpGeom = function () {
+  const lb = listEl.getBoundingClientRect();
+  const rows = [];
+  innerEl.querySelectorAll(".row").forEach(el => {
+    const tw = el.querySelector(".twist");
+    const nm = el.querySelector(".nm");
+    if (!tw || !nm) return;
+    const tb = tw.getBoundingClientRect(), nb = nm.getBoundingClientRect();
+    const cs = getComputedStyle(nm);
+    rows.push({
+      name: nm.textContent.slice(0, 14),
+      isFile: tw.classList.contains("empty"),
+      indent: cs.paddingLeft,
+      twistL: Math.round(tb.left - lb.left),
+      twistW: Math.round(tb.width),
+      nameL: Math.round(nb.left - lb.left),
+      namePadL: cs.paddingLeft,
+      twistDisplay: getComputedStyle(tw).display,
+      twistMaxW: getComputedStyle(tw).maxWidth,
+      twistFlex: getComputedStyle(tw).flex,
+      arrowVarResolved: getComputedStyle(document.documentElement).getPropertyValue("--arrow").trim(),
+      htmlHead: document.head.innerHTML.length,
+      hasNewCSS: document.head.innerHTML.includes("min-width:var(--arrow)"),
+      twistHTML: tw.outerHTML,
+      twistChildNodes: tw.childNodes.length,
+      twistText: JSON.stringify(tw.textContent),
+      nmHTML: nm.outerHTML.slice(0, 80),
+      rowDisplay: getComputedStyle(el).display,
+      rowFlexDir: getComputedStyle(el).flexDirection,
+      twCS_width: getComputedStyle(tw).width,
+      twCS_flexBasis: getComputedStyle(tw).flexBasis,
+      twCS_flexGrow: getComputedStyle(tw).flexGrow,
+      twCS_flexShrink: getComputedStyle(tw).flexShrink,
+      twCS_display: getComputedStyle(tw).display,
+      twCS_visibility: getComputedStyle(tw).visibility,
+      twCS_overflow: getComputedStyle(tw).overflow,
+      allRules: (function(){
+        const out=[];
+        for (const sh of document.styleSheets) {
+          try { for (const r of sh.cssRules) {
+            if (r.selectorText && r.selectorText.includes("twist"))
+              out.push(r.selectorText + "{" + r.style.cssText.slice(0,90) + "}");
+          } } catch(e){}
+        }
+        return out;
+      })(),
+      twTag: tw.tagName,
+      twParent: tw.parentNode ? tw.parentNode.className : "none",
+      twSiblings: tw.parentNode ? tw.parentNode.children.length : -1,
+      twOffsetW: tw.offsetWidth,
+      twClientW: tw.clientWidth,
+      twistL2: Math.round(tw.getBoundingClientRect().left - lb.left),
+      twistR2: Math.round(tw.getBoundingClientRect().right - lb.left),
+      forceTest: (function(){
+        const c = tw.cloneNode(true);
+        c.style.cssText = "display:block;width:22px;min-width:22px;max-width:22px;flex:0 0 22px";
+        el.appendChild(c);
+        const w1 = Math.round(c.getBoundingClientRect().width);
+        c.style.cssText = "";
+        const w2 = Math.round(c.getBoundingClientRect().width);
+        const cw = Math.round(tw.getBoundingClientRect().width);
+        c.remove();
+        return { inlineForced: w1, cleared: w2, original: cw };
+      })(),
+    });
+  });
+  post({ cmd: "diag", what: "geom", count: rows.length, rows });
+};
+
+// 漂移诊断：连续开关同一目录 6 次，每次记录列坐标
+window.__drift = function () {
+  const log = [];
+  const dir = state.rows.find(r => r.hasKids && !r.up);
+  if (!dir) { post({cmd:"diag", what:"drift", err:"no dir"}); return; }
+  const id = dir.node.id;
+  for (let k = 0; k < 6; k++) {
+    state.expanded.has(id) ? state.expanded.delete(id) : state.expanded.add(id);
+    render();
+    log.push({
+      k, clientW: listEl.clientWidth, scrollbar: listEl.offsetWidth - listEl.clientWidth,
+      listW: Math.round(listEl.getBoundingClientRect().width),
+      leftW: Math.round(document.querySelector(".left").getBoundingClientRect().width),
+      mainW: Math.round(document.querySelector(".main").getBoundingClientRect().width),
+      bodyW: document.body.clientWidth,
+      winW: window.innerWidth,
+      NAME_X, nmW: colW.nm, sizeX: colX.size, typeX: colX.type, filesX: colX.files,
+      innerW: Math.round(innerEl.getBoundingClientRect().width),
+    });
+  }
+  post({ cmd: "diag", what: "drift", log });
+};
+
+// 列布局诊断：报告表头和首行的实际坐标
+window.__cols = function () {
+  const head = [];
+  document.querySelectorAll("#head .hcell").forEach(el => {
+    const cs = getComputedStyle(el);
+    head.push({ key: el.dataset.key, left: cs.left, width: cs.width });
+  });
+  const row = [];
+  const r0 = document.querySelector(".row");
+  if (r0) [...r0.children].forEach((el, i) => {
+    const cs = getComputedStyle(el);
+    row.push({ i, cls: el.className.split(" ")[0], left: cs.left, width: cs.width });
+  });
+  post({ cmd: "diag", what: "cols", head, row });
+};
+
+// 把树图 canvas 导出为 PNG（base64）交给宿主写盘，用于人工核对渲染效果
+window.__dumpPng = function () {
+  try {
+    if (!tmCanvas) { post({cmd:"diag", what:"png", err:"no canvas"}); return; }
+    const url = tmCanvas.toDataURL("image/png");
+    post({ cmd: "diag", what: "png", data: url });
+  } catch (e) {
+    post({ cmd: "diag", what: "png", err: e.message });
+  }
+};
+
+// 页面加载后握手：告诉宿主「页面已就绪」
+window.addEventListener("load", () => {
+  document.getElementById("st0").textContent =
+    "页面已就绪 · 通道 " +
+    (window.chrome && chrome.webview ? "OK" : "缺失");
+  post({ cmd: "ready" });
+  // 自报关键控件的屏幕坐标（宿主写日志，供自动化点击定位）
+  const r = document.getElementById("scan").getBoundingClientRect();
+  post({ cmd:"diag", what:"geom",
+         scanBtn:{ x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2),
+                   w: Math.round(r.width), h: Math.round(r.height) },
+         dpr: window.devicePixelRatio });
+  // 自动扫描（供无人值守验证）：宿主注入 __AUTOSCAN 后再触发
+  if (window.__AUTOSCAN) {
+    document.getElementById("path").value = window.__AUTOSCAN;
+    document.getElementById("scan").click();
+  }
+});
+
+// 自检（仅当宿主注入 __SELFTEST 时跑）：验证展开/主题/排序/返回上级
+window.__runSelfTest = function () {
+  const rep = {};
+  try {
+    const before = state.rows.length;
+    const tw = document.querySelector(".twist:not(.empty)");
+    if (tw) {
+      tw.click();
+      rep.expand = { before, after: state.rows.length, grew: state.rows.length > before };
+    } else rep.expand = "no twist found";
+
+    // 主题
+    const el = document.documentElement;
+    const t0 = el.getAttribute("data-theme") || "dark";
+    document.getElementById("theme").click();
+    const t1 = el.getAttribute("data-theme") || "dark";
+    rep.theme = { from: t0, to: t1, changed: t0 !== t1 };
+    document.getElementById("theme").click();   // 切回
+
+    // 排序
+    const first0 = state.rows[state.current && state.current.parent ? 1 : 0]?.node.name;
+    document.querySelector('[data-i="0"]').click();
+    const first1 = state.rows[state.current && state.current.parent ? 1 : 0]?.node.name;
+    rep.sort = { from: first0, to: first1, changed: first0 !== first1 };
+
+    // 对齐检查：对每个「深度」分别报告 目录行 / 文件行 的名字左边缘
+    {
+      const lb = listEl.getBoundingClientRect();
+      const buckets = {};
+      innerEl.querySelectorAll(".row").forEach(el => {
+        const lab = el.querySelector(".nm");
+        const tw = el.querySelector(".twist");
+        const ind = el.querySelector(".indent");
+        if (!lab || !tw) return;
+        const depth = parseInt(ind.style.width || "0", 10) / 16 | 0;
+        const isFile = tw.classList.contains("empty");
+        const key = depth + (isFile ? "F" : "D");
+        const cs = getComputedStyle(tw);
+        const rec = {
+          name: lab.textContent.slice(0, 8),
+          cls: tw.className,
+          html: tw.outerHTML.slice(0, 50),
+          twistW: Math.round(tw.getBoundingClientRect().width),
+          cssFlex: cs.flex, cssW: cs.width, cssMaxW: cs.maxWidth,
+          arrowVar: cs.getPropertyValue("--arrow").trim(),
+          labelL: Math.round(lab.getBoundingClientRect().left - lb.left),
+        };
+        (buckets[key] = buckets[key] || []).push(rec);
+      });
+      const summary = {};
+      for (const k in buckets) {
+        const ls = [...new Set(buckets[k].map(o => o.labelL))];
+        summary[k] = { n: buckets[k].length, labelLefts: ls, sample: buckets[k][0] };
+      }
+      rep.align = summary;
+    }
+    // 命中精度：取若干块，检查它的四角像素点是否都命中自己
+    {
+      let okAll = true, checked = 0, bad = [];
+      for (const r of tmLiveLeaves.slice(0, 40)) {
+        const R = tmRect(r);
+        if (R.w < 2 || R.h < 2) continue;
+        checked++;
+        const pts = [[R.x0, R.y0], [R.x0, R.y1 - 1], [R.x1 - 1, R.y0], [R.x1 - 1, R.y1 - 1],
+                     [Math.floor((R.x0 + R.x1) / 2), Math.floor((R.y0 + R.y1) / 2)]];
+        for (const [px, py] of pts) {
+          const h = tmHitTest(px, py);
+          // 中心点必须命中自己；四角可能被后画的覆盖，只要命中即可（不算错）
+          if (!h) { okAll = false; bad.push([px, py, "miss"]); }
+        }
+      }
+      rep.hitPrec = { checked, okAll, bad: bad.slice(0, 3) };
+    }
+    // 导航测试：进一个子目录 → 面包屑 → 上级 → 返回
+    {
+      const rootName = state.current ? state.current.name : null;
+      const rootPath = state.current ? nodeFullPath(state.current) : null;
+      const dir = state.view.find(v => v.isDir);
+      if (dir) {
+        enter(dir);
+        const crumbs1 = document.getElementById("crumbs").textContent;
+        const cur1 = state.current.name;
+        const rows1 = state.rows.length;
+        goUp();
+        const backToRoot = nodeFullPath(state.current) === rootPath;
+        goBack();
+        rep.nav = {
+          entered: dir.name, curAfterEnter: cur1, crumbs: crumbs1,
+          rowsInChild: rows1,
+          upWorks: backToRoot,
+          backWorks: nodeFullPath(state.current) === rootPath,
+          hasBackBtn: !!document.getElementById("back"),
+          hasUpBtn: !!document.getElementById("up"),
+          rootName,
+        };
+      } else rep.nav = { noDir: true, rootName };
+    }
+    // 树图块数（canvas：从布局数组取）
+    rep.treemap = tmLiveLeaves.length;
+    rep.arrows = document.querySelectorAll(".twist:not(.empty)").length;
+    rep.upRow = !!document.querySelector(".row") &&
+                document.querySelector(".row .nm")?.textContent === "..";
+
+    // 树图选中：模拟点第一个块的中心点，看 selectedId 与联动
+    if (tmLiveLeaves.length) {
+      const r0 = tmLiveLeaves[0];
+      // 注意：tmHitTest 收的是【画布像素】，r0.x/y 是虚拟坐标 → 必须先过视口
+      const c0x = vx(r0.x + r0.w / 2), c0y = vy(r0.y + r0.h / 2);
+      const hit = tmHitTest(c0x, c0y);
+      rep.tmSelect = {
+        leaves: tmLiveLeaves.length,
+        hitId: hit ? hit.id : null,
+        expectId: r0.node.id,
+        hitOk: !!hit && hit.id === r0.node.id,
+      };
+      // 选中性能：轻路径应远快于全量重画
+      const t0 = performance.now();
+      setTreemapSelection(r0.node.id);
+      rep.tmSelect.selMs = +(performance.now() - t0).toFixed(2);
+      const t1 = performance.now();
+      renderTreemap();
+      rep.tmSelect.fullMs = +(performance.now() - t1).toFixed(2);
+
+      // ⚡ 命中测试对照：新实现（沿树下行的递归）必须与旧的线性扫描逐点完全一致。
+      // 采样：每 37 个字的网格点 + 每块中心点，比较两者返回的 node.id。
+      const { W: cW, H: cH } = ensureCanvas();
+      let sample = 0, mismatch = 0, badSample = null;
+      const cmp = (x, y) => {
+        sample++;
+        const a = tmHitTest(x, y), b = tmHitTestScan(x, y);
+        const ai = a ? a.id : null, bi = b ? b.id : null;
+        if (ai !== bi) { mismatch++; if (!badSample) badSample = { x: Math.round(x), y: Math.round(y), fast: ai, scan: bi }; }
+      };
+      for (let y = 0; y < cH; y += 37) for (let x = 0; x < cW; x += 37) cmp(x + 0.5, y + 0.5);
+      for (let i = 0; i < tmLiveLeaves.length; i += Math.max(1, (tmLiveLeaves.length / 400) | 0)) {
+        const r = tmLiveLeaves[i];
+        cmp(vx(r.x + r.w / 2), vy(r.y + r.h / 2));
+      }
+      const _t2 = performance.now();
+      for (let i = 0; i < 200; i++) tmHitTest((i * 7.3) % cW, (i * 11.7) % cH);
+      const fastMs = +(performance.now() - _t2).toFixed(3);
+      const _t3 = performance.now();
+      for (let i = 0; i < 200; i++) tmHitTestScan((i * 7.3) % cW, (i * 11.7) % cH);
+      const scanMs = +(performance.now() - _t3).toFixed(3);
+      rep.hitTest = { sample, mismatch, badSample, fast200Ms: fastMs, scan200Ms: scanMs };
+    }
+  } catch (e) {
+    rep.error = e.message;
+  }
+  post({ cmd: "diag", what: "selftest", report: rep });
+};
+
+// 诊断：捕获页面上的任意点击/按键，发给宿主写日志
+document.addEventListener("click", e => {
+  post({ cmd: "diag", what: "click", x: e.clientX, y: e.clientY,
+         tag: (e.target && e.target.id) || (e.target && e.target.className) || "?" });
+}, true);
+document.addEventListener("mousedown", e => {
+  post({ cmd: "diag", what: "down", x: e.clientX, y: e.clientY });
+}, true);
+
+// 宿主 → 页面：WebView2 用 PostWebMessageAsJson 推的对象走 message 事件
+if (window.chrome && chrome.webview) {
+  chrome.webview.addEventListener("message", ev => {
+    const d = ev.data;
+    if (!d) return;
+    if (d.stats !== undefined && d.root !== undefined) {
+      window.__host.setTree(d);          // 扫描结果
+    } else if (d.kind === "progress") {
+      window.__host.setProgress(d.items, d.bytes);
+    } else if (d.kind === "theme") {
+      applyTheme(d.theme);               // 宿主推来的已存主题
+    } else if (d.kind === "settings") {
+      setData = d.data || {};
+      buildSettingsForm();
+    } else if (d.kind === "scanfail") {
+      // 宿主拒绝了这次扫描（无效路径 / 已在扫描中）→ 页面复位，别卡在"扫描中"
+      if (typeof setScanState === "function") setScanState(false);
+      const w = document.getElementById("progWrap");
+      if (w) w.style.display = "none";
+      document.getElementById("st0").textContent =
+        (d.reason || "扫描未开始");
+      post({ cmd:"diag", what:"scanfail-ack", reason: d.reason || "" });
+    } else if (d.kind === "prefs") {
+      // 宿主推来的界面偏好 blob → 页面自己解析并恢复（C++ 不懂内容）
+      try {
+        const p = JSON.parse(d.json || "{}");
+        prefs = Object.assign({ theme: "dark", mapKind: "sqrt", ordKind: "sumG", powAlpha: 0.5 }, p);
+      } catch (_) {}
+      applyPrefs();
+    } else if (d.kind === "libwords") {
+      // 预字库：软件打开瞬间 C++ 推送；二进制 nameIdx < libCount 时按此索引取词
+      window.__host._libWords = (d.words || []).slice();
+    } else if (d.kind === "scanDone") {
+      // 扫描完成轻量通知：立即收进度条/还原按钮（大 JSON 还在路上）
+      const pw = document.getElementById("progWrap");
+      if (pw) pw.style.display = "none";
+      if (typeof setScanState === "function") setScanState(false);
+    } else if (d.kind === "binPart") {
+      // 二进制全量传输：分批 base64 片段，全部到齐后一次解析建树
+      window.__host.addBinPart(d);
+    } else if (d.kind === "binDone") {
+      window.__host.finishBin(d);
+    } else if (d.kind === "treePart") {
+      // 全量传输：分批到达的扁平节点 → 按 parentId 挂到累积树
+      window.__host.accumulatePart(d.nodes);
+    } else if (d.kind === "treeDone") {
+      // 全量树收齐：一次性建树 + 渲染
+      window.__host.finalizeTree(d);
+    } else if (d.kind === "children") {
+      applyChildren(d.id, d.children);   // 懒加载的子项（全量模式下一般不会触发）
+    }
+  });
+}
+
+// C++ 调用入口（保留 ExecuteScript 路径，供少量简单调用）
+window.__host = {
+  // ===== 二进制全量传输：base64 分批 → 一次解析建树（不用 JSON） =====
+  _binChunks: [],
+  _libWords: [],      // 预字库：启动时 C++ 推送的高频词表（nameIdx < libCount 时引用）
+  _binGot: 0,
+  _binT0: 0,
+  addBinPart(d) {
+    if (!window.__host._binT0) window.__host._binT0 = performance.now();
+    window.__host._binChunks.push({ seq: d.seq, s: atob(d.b64) });
+    window.__host._binGot += d.size;
+  },
+  finishBin(d) {
+    const t0 = performance.now();
+    const chunks = window.__host._binChunks;
+    chunks.sort((a, b) => a.seq - b.seq);
+    let total = 0;
+    for (const c of chunks) total += c.s.length;
+    const bytes = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) {
+      const ss = c.s;
+      for (let i = 0; i < ss.length; i++) bytes[off++] = ss.charCodeAt(i) & 0xFF;
+    }
+    window.__host._binChunks = [];
+    window.__host._binGot = 0;
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (bytes.length < 24 || dv.getUint32(0, true) !== 0x4B4D4442) {
+      document.getElementById("st0").textContent = "扫描失败（二进制流损坏）";
+      if (typeof setScanState === "function") setScanState(false);
+      return;
+    }
+    const nodeCount = dv.getUint32(8, true);
+    const libCount = dv.getUint32(12, true);
+    const strCount = dv.getUint32(16, true);   // wordCount：词表词数（不含预字库）
+    // ---- 字符串表：前缀增量流 → 还原完整字节表 → 一次解码 → 按偏移切片 ----
+    let q = 28;
+    // UTF-16LE：偏移按【码元】记录（slice 码元索引才对齐；UTF-8 字节偏移切中文会错位）
+    const strOff = new Uint32Array(strCount + 1);
+    let totalCu = 0;
+    for (let i = 0; i < strCount; i++) {
+      const cl = dv.getUint16(q, true), sl = dv.getUint16(q + 2, true);
+      strOff[i] = totalCu;
+      totalCu += cl + sl;
+      q += 4 + sl * 2;
+    }
+    strOff[strCount] = totalCu;
+    const full = new Uint8Array(totalCu * 2);
+    q = 28;   // header 28B：第二遍解码起点必须与第一遍一致
+    let prevStartB = 0;
+    for (let i = 0; i < strCount; i++) {
+      const cl = dv.getUint16(q, true), sl = dv.getUint16(q + 2, true);
+      const dst = strOff[i] * 2;
+      if (cl > 0) {
+        for (let k = 0; k < cl * 2; k++) full[dst + k] = full[prevStartB + k];
+      }
+      const src = q + 4;
+      for (let k = 0; k < sl * 2; k++) full[dst + cl * 2 + k] = bytes[src + k];
+      q += 4 + sl * 2;
+      prevStartB = dst;
+    }
+    const allStr = new TextDecoder('utf-16le').decode(full);
+    // ---- 节点区：28B/节点，父先子后 ----
+    const nodes = new Array(nodeCount);
+    let root = null;
+    const getU64 = (pp) => Number(dv.getBigUint64(pp, true));
+    for (let i = 0; i < nodeCount; i++) {
+      const pid = dv.getUint32(q, true); q += 4;
+      const size = getU64(q); q += 8;
+      const fc = dv.getUint32(q, true); q += 4;
+      const dc = dv.getUint32(q, true); q += 4;
+      const flags = dv.getUint32(q, true); q += 4;
+      const nameId = dv.getUint32(q, true); q += 4;
+      // nameIdx < libCount → 预字库词；否则 → 词表词（索引 - libCount）
+      const name = nameId < libCount
+        ? window.__host._libWords[nameId] || ""
+        : allStr.slice(strOff[nameId - libCount], strOff[nameId - libCount + 1]);
+      const node = { id: i + 1, name,
+                     size, fileCount: fc, dirCount: dc,
+                     isDir: (flags & 1) !== 0, children: [] };
+      if (pid === 0xFFFFFFFF) root = node;
+      else {
+        const par = nodes[pid];
+        if (par) { node.parent = par; par.children.push(node); }
+      }
+      nodes[i] = node;
+    }
+    const recvMs = Math.round(performance.now() - (window.__host._binT0 || t0));
+    // 收进度条 / 还原按钮
+    const w = document.getElementById("progWrap");
+    if (w) w.style.display = "none";
+    if (typeof setScanState === "function") setScanState(false);
+    if (!root) {
+      document.getElementById("st0").textContent = "扫描失败（root 为空）";
+      return;
+    }
+    state.root = root;
+    state.rootNode = root;
+    _lastTreeAt = Date.now();
+    _scanT0 = 0;
+    enter(root);
+    const mftBtn = document.getElementById("mftToggle");
+    if (mftBtn && d && typeof d.mode === "number") window.__mftMode(d.mode, true);
+    state.expanded.add(root.id);
+    tmLayoutKey = "";
+    renderTreemap(true);
+    startProgressiveDetail();
+    const st = (d && d.stats) || {};
+    _st0AfterRender =
+      `扫描完成 · ${(d && d.mode) ? "MFT 直读" : "普通遍历"} · ${nodeFullPath(root) || ""} · ${fmtCount(st.items || 0)} 项`;
+    document.getElementById("st0").textContent = _st0AfterRender;
+    post({ cmd: "diag", what: "perf", binRecvMs: recvMs, nodes: nodeCount,
+           strCount, strBytes: totalCu * 2, binBytes: bytes.length });
+  },
+  // ===== 全量传输：分批累积树（不懒加载，旧 JSON 路径保留作兼容） =====
+  _treeById: new Map(),
+  _recvT0: 0,
+  accumulatePart(nodes) {
+    if (!window.__host._recvT0) window.__host._recvT0 = performance.now();
+    const byId = window.__host._treeById;
+    for (const nd of nodes) {
+      // path 只在根节点有（C++ 省传输）；子节点用 nodeFullPath(parent 链) 实时拼
+      const node = { id: nd.id, name: nd.name, size: nd.size,
+                     fileCount: nd.fileCount || 0, dirCount: nd.dirCount,
+                     isDir: !!nd.isDir, children: [] };
+      if (nd.parentId === 0) {
+        state.root = node; state.rootNode = node;
+        byId.set(node.id, node);
+      } else {
+        const par = byId.get(nd.parentId);
+        if (par) {
+          node.parent = par; par.children.push(node);
+        }
+        byId.set(node.id, node);
+      }
+    }
+  },
+  finalizeTree(d) {
+    const _ft0 = performance.now();
+    const root = state.root;
+    if (!root) {
+      document.getElementById("st0").textContent = "扫描失败（root 为空）";
+      if (typeof setScanState === "function") setScanState(false);
+      return;
+    }
+    // 收进度条 / 还原按钮
+    const w = document.getElementById("progWrap");
+    if (w) w.style.display = "none";
+    if (typeof setScanState === "function") setScanState(false);
+    _lastTreeAt = Date.now();
+    _scanT0 = 0;
+    enter(root);
+    const _ft1 = performance.now();   // enter（左侧列表构建）完成
+    const mftBtn = document.getElementById("mftToggle");
+    if (mftBtn && d && typeof d.mode === "number")
+      window.__mftMode(d.mode, true);   // 按钮显示 = 实际扫描模式
+    state.expanded.add(root.id);
+    tmLayoutKey = "";                    // 强制重布局（新扫描 id 从 1 重排）
+    renderTreemap(true);
+    startProgressiveDetail();
+    const st = (d && d.stats) || {};
+    _st0AfterRender =
+      `扫描完成 · ${(d && d.mode) ? "MFT 直读" : "普通遍历"} · ${nodeFullPath(root) || ""} · ${fmtCount(st.items || 0)} 项`;
+    document.getElementById("st0").textContent = _st0AfterRender;
+    // 全量树已就绪：清空累积暂存，避免残留
+    window.__host._treeById = new Map();
+    // 计时诊断：接收/累积 + enter（列表构建）耗时
+    const _ft2 = performance.now();
+    post({ cmd:"diag", what:"perf",
+      recvMs: Math.round(window.__host._recvT0 ? (_ft0 - window.__host._recvT0) : 0),
+      enterMs: Math.round(_ft1 - _ft0),
+      finalizeMs: Math.round(_ft2 - _ft0),
+      nodes: 0 });
+  },
+  // 扫描完成：把整棵树交给前端
+  setTree(payload) {
+    // 扫描完成 → 立即收起进度条/还原按钮（不等树渲染，避免"卡住不结束"的感觉）
+    const w0 = document.getElementById("progWrap");
+    if (w0) w0.style.display = "none";
+    if (typeof setScanState === "function") setScanState(false);
+    // C++ 传来 {"stats":{...},"root":{...}}
+    const root = payload && payload.root ? payload.root : payload;
+    if (!root) {
+      document.getElementById("st0").textContent = "扫描失败（root 为空）";
+      return;
+    }
+    // 建立 parent 链（C++ 只给嵌套 children，前端补 parent 引用）
+    (function link(n, par) {
+      n.parent = par;
+      if (n.children) for (const c of n.children) link(c, n);
+    })(root, null);
+
+    state.root = root;
+    state.rootNode = root;          // 扫描的根目录 = 最顶层父集（始终作为第一行显示）
+    _lastTreeAt = Date.now();       // 记下完成时刻（忽略之后迟到的 progress）
+    _scanT0 = 0;
+    {
+      const w = document.getElementById("progWrap");
+      if (w) w.style.display = "none";     // 扫描完成 → 收起进度条
+      if (typeof setScanState === "function") setScanState(false);   // 按钮还原为「扫描」
+    }
+    enter(root);
+    // 按钮显示 = 实际扫描模式（宿主 JSON 带 mode：0=普通遍历，1/2=MFT 直读）
+    const mftBtn = document.getElementById("mftToggle");
+    if (mftBtn && payload && typeof payload.mode === "number")
+      window.__mftMode(payload.mode, true);   // 扫描完成：强制按【实际执行模式】显示（不依赖 admin）
+    state.expanded.add(root.id);    // 根默认展开
+    // 【关键】新扫描必须强制重布局：宿主每次扫描都把节点 id 从 1 开始编号，
+    // 所以新树的 root.id 和旧树一样 → 布局缓存的 key 不变 → 不重布局，
+    // 结果就是「左边列表换了、右边树图还是上一棵树」（踩过）。
+    tmLayoutKey = "";
+    renderTreemap(true);
+    startProgressiveDetail();       // 后台渐进细化：让树图从粗到细自己长出来
+    if (window.__GEOM) setTimeout(() => window.__dumpGeom(), 300);
+    if (window.__DRIFT) setTimeout(() => window.__drift(), 400);
+    if (window.__COLS) setTimeout(() => window.__cols(), 350);
+    if (window.__PNG) setTimeout(() => window.__dumpPng(), 500);
+    const st = (payload && payload.stats) || {};
+    document.getElementById("st0").textContent =
+      `扫描完成 · ${payload.mode ? "MFT 直读" : "普通遍历"} · ${nodeFullPath(root) || ""} · ${fmtCount(st.items || 0)} 项`;
+  },
+  setProgress(items, bytes) {
+    // 0/0 视为「复位」（宿主用它表示清空进度），不要当成扫描中
+    if (!items && !bytes) {
+      const w0 = document.getElementById("progWrap");
+      if (w0) w0.style.display = "none";
+      return;
+    }
+    // 扫描已完成后的迟到 progress（宿主可能在 SCAN DONE 之后还发一条）要忽略，
+    // 否则会把按钮又切回「停止」、进度条又冒出来（踩过：一直显示"扫描中"）。
+    if (Date.now() - _lastTreeAt < 600) return;
+
+    // 记录起点，用于算速度/耗时
+    if (!_scanT0) { _scanT0 = Date.now(); _scanBytes0 = bytes; _scanItems0 = items; }
+    const dt = Math.max(0.2, (Date.now() - _scanT0) / 1000);
+    const itemRate = ((items - _scanItems0) / dt);
+    const byteRate = (bytes - _scanBytes0) / dt;
+
+    document.getElementById("st0").textContent = "扫描中…";
+    if (typeof setScanState === "function") setScanState(true);
+    const w = document.getElementById("progWrap");
+    if (w) {
+      w.style.display = "flex";
+      document.getElementById("progTxt").textContent =
+        `${fmtCount(items)} 项 · ${fmtSize(bytes)} · ` +
+        `${fmtCount(Math.round(itemRate))} 项/s · ${fmtSize(Math.round(byteRate))}/s`;
+    }
+  },
+  // 诊断通道：显示宿主收到的原始消息
+  __hostEcho(json) {
+    try {
+      const o = typeof json === "string" ? JSON.parse(json) : json;
+      document.getElementById("st1").textContent = "宿主收到: " + o.cmd;
+    } catch (e) {
+      document.getElementById("st1").textContent = "宿主收到(原始): " + json;
+    }
+  },
+};
+
+// 启动：先恢复列宽/分栏偏好，再首渲染
+loadColPrefs();
+applySplit();
+render();
+</script>
+</body>
+</html>
