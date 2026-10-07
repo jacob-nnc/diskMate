@@ -1,4 +1,4 @@
-﻿# DiskMate
+# DiskMate
 
 > 对标 [WizTree](https://diskanalyzer.com/) 的 Windows 磁盘空间分析器。NTFS `$MFT` 直读，
 > 百万级文件的矩形树图（Treemap）可视化。C++17 + Dear ImGui / WebView2，**无第三方运行时依赖**。
