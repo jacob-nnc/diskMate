@@ -1,0 +1,7 @@
+﻿* text=auto
+*.ico binary
+*.png binary
+*.bmp binary
+*.ps1 text eol=crlf
+*.mjs text eol=lf
+*.py  text eol=lf
